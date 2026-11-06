@@ -736,9 +736,14 @@ class Island(QtWidgets.QWidget):
                 amp = self.poke.x * 7.5
                 sig2 = 2 * 24.0 ** 2
 
-                def poke_w(px, py, nx, ny, ppt=ppt, amp=amp, sig2=sig2):
+                farv = {"top": (0, 1), "bottom": (0, -1), "left": (1, 0), "right": (-1, 0)}[self.edge]
+
+                def poke_w(px, py, nx, ny, ppt=ppt, amp=amp, sig2=sig2, farv=farv):
+                    wgt = nx * farv[0] + ny * farv[1]       # 只让远离屏幕边的一侧被挤压
+                    if wgt <= 0.35:
+                        return 0.0
                     d2 = (px - ppt.x()) ** 2 + (py - ppt.y()) ** 2
-                    return -amp * math.exp(-d2 / sig2)      # 正 = 向内凹（被挤压），负 = 回弹外鼓
+                    return -amp * wgt * wgt * math.exp(-d2 / sig2)      # 正 = 向内凹，负 = 回弹外鼓
                 wave = poke_w
             if playing_wave:
                 pk = clamp(self.peak_fn() * 1.5, 0, 1)

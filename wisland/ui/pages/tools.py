@@ -88,7 +88,7 @@ class ClipRow(Hoverable):
             txt = "图片"
         else:
             txt = " ".join((self.item.get("text") or "").split())
-        tw = r.right() - x - 116
+        tw = r.right() - x - 112
         p.setFont(ui_font(12.5))
         p.setPen(theme.text())
         fm = QtGui.QFontMetrics(p.font())
@@ -121,9 +121,11 @@ class ClipboardPage(Page):
         clear = PillButton("清空", G.TRASH, height=30)
         clear.clicked.connect(lambda: ctx.clipboard.clear())
         self.sc = ScrollArea()
-        self.list = QtWidgets.QVBoxLayout(self.sc.inner)
+        self.list = QtWidgets.QGridLayout(self.sc.inner)
         self.list.setContentsMargins(0, 0, 4, 0)
         self.list.setSpacing(6)
+        self.list.setColumnStretch(0, 1)
+        self.list.setColumnStretch(1, 1)
         self.setLayout(vbox(hbox((self.search, 1), clear), (self.sc, 1), spacing=8))
         ctx.clipboard.changed.connect(self._changed)
         self._dirty = True
@@ -150,13 +152,13 @@ class ClipboardPage(Page):
             row.clicked.connect(lambda iid=iid, row=row: self._copy(iid, row))
             row.pin_toggled.connect(lambda iid=iid, it=item: self.ctx.clipboard.pin(iid, not it.get("pinned")))
             row.delete_clicked.connect(lambda iid=iid: self.ctx.clipboard.remove(iid))
-            self.list.addWidget(row)
+            self.list.addWidget(row, n // 2, n % 2)
             if self._just and self._just[0] == iid and time.monotonic() - self._just[1] < 0.9:
                 row.mark_copied()
             n += 1
         if n == 0:
-            self.list.addWidget(Label("空" if not q else "无匹配", 12.5, level=3, align=Qt.AlignmentFlag.AlignCenter))
-        self.list.addStretch(1)
+            self.list.addWidget(Label("空" if not q else "无匹配", 12.5, level=3, align=Qt.AlignmentFlag.AlignCenter), 0, 0, 1, 2)
+        self.list.setRowStretch(max(1, (n + 1) // 2), 1)
 
     def _copy(self, iid, row):
         """点击 = 复制到剪贴板（不粘贴）。"""

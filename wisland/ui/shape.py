@@ -179,7 +179,8 @@ def neck_path(edge: str, line: float, c: float, length: float, gap: float, t: fl
     fb = fillet * smooth(tc * 3.0) * strength                       # 本体侧圆角（拉开后才出现）
     e = wz + fe
     b = min(wz + fb, max(wz, half - corner * 0.5))
-    ov = min(8.0, corner + 3.0)                                     # 没入本体的深度（被并集吃掉）
+    # 没入本体的深度（被并集吃掉）。贴合时要够深，盖住本体多边形被平滑掉的贴边直角，避免两侧露缝
+    ov = max(min(8.0, corner + 3.0), fillet * (1.0 - tc))
     ym = max(gap * 0.5, fe)                                         # 腰部位置
     yb = gap + 0.5                                                  # 本体顶面
 

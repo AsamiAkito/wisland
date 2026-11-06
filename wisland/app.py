@@ -312,24 +312,25 @@ def main():
         m.aboutToHide.connect(lambda: island.locks.discard("menu"))
         m.popup(pos)
     island.menu_requested.connect(show_menu)
-    # 图钉：保持展开；旁边的穿透按钮：鼠标穿过灵动岛，只响应右键
-    pin_btn = island.nav.add_right_button(G.UNPIN, "保持展开", lambda: island.set_pinned(not island.pinned()))
-    pt_btn = island.nav.add_right_button(G.POINTER, "可穿透", lambda: island.set_passthrough(not island.passthrough()))
+    # 主页的「保持展开」「可穿透」按钮
+    home = P["home"]
+    home.a_pin.clicked.connect(lambda: island.set_pinned(not island.pinned()))
+    home.a_pt.clicked.connect(lambda: island.set_passthrough(not island.passthrough()))
 
     def on_pin(on):
-        pin_btn.set_glyph(G.PIN if on else G.UNPIN)
-        pin_btn.set_active(on)
-        pin_btn.setToolTip("保持展开：已开启" if on else "保持展开")
+        home.a_pin.set_on(on, G.PIN if on else G.UNPIN, "保持展开")
 
     def on_pt(on):
-        pt_btn.set_active(on)
-        pt_btn.setToolTip("可穿透：已开启（右键菜单可关闭）" if on else "可穿透")
-        island.activity({"glyph": G.POINTER, "title": "可穿透已开启" if on else "可穿透已关闭",
-                         "sub": "只响应右键" if on else ""}, 1.8)
+        home.a_pt.set_on(on, None, "可穿透")
+        if on:
+            compact.set_view("pet")            # 穿透时直接显示小形象
+            island._kick()
     island.pin_changed.connect(on_pin)
     island.passthrough_changed.connect(on_pt)
     on_pin(island.pinned())
-    pt_btn.set_active(island.passthrough())
+    home.a_pt.set_on(island.passthrough(), None, "可穿透")
+    if island.passthrough():
+        compact.set_view("pet")
     island.nav.add_right_button(G.GEAR, "设置", lambda: show_menu(QtGui.QCursor.pos()))
 
     tray = QtWidgets.QSystemTrayIcon(QtGui.QIcon(glyph_pixmap(G.APPS, 32, QtGui.QColor("#4f8cff"))), app)
@@ -340,6 +341,16 @@ def main():
     tray.setContextMenu(tmenu)
     tray.activated.connect(lambda r: island.toggle() if r == QtWidgets.QSystemTrayIcon.ActivationReason.Trigger else None)
     tray.show()
+
+    # ---------------- 收起态：时间天气与小形象每隔几十秒自动轮换 ----------------
+    def auto_cycle():
+        if island.expanded or island.passthrough() or compact.view not in ("clock", "pet"):
+            return
+        compact.set_view("pet" if compact.view == "clock" else "clock")
+        island._kick()
+    cyc = int(cfg.get("island.auto_cycle_s", 30) or 0)
+    if cyc > 0:
+        QtCore.QTimer(app, interval=cyc * 1000, timeout=auto_cycle).start()
 
     # ---------------- 全屏时隐藏 ----------------
     def check_fullscreen():

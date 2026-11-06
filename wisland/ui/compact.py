@@ -20,6 +20,60 @@ H_MEDIA = 36
 H_ACT = 40
 
 
+class PetFace:
+    """原创小形象：两只圆润的眼睛，会眨眼、看向光标，靠近时眯成开心的弧线，带一点腮红。
+    s 为缩放（灵动岛上 1.0，主页上更大）。"""
+
+    def __init__(self):
+        self.eye = [0.0, 0.0]
+        self.blink_at = time.monotonic() + 2.5
+        self.happy = 0.0
+
+    def paint(self, p: QtGui.QPainter, cx: float, cy: float, s: float, a: float,
+              look: QtCore.QPointF, near: bool):
+        now = time.monotonic()
+        lx = clamp(look.x() / (60.0 * s), -1, 1) * 4.5 * s
+        ly = clamp(look.y() / (40.0 * s), -1, 1) * 2.5 * s
+        if not near and abs(look.x()) > 400:
+            lx = math.sin(now * 0.7) * 3.5 * s          # 光标很远：自己慢慢东张西望
+            ly = math.sin(now * 0.43) * 1.2 * s
+        self.eye[0] += (lx - self.eye[0]) * 0.18
+        self.eye[1] += (ly - self.eye[1]) * 0.18
+        self.happy += ((1.0 if near else 0.0) - self.happy) * 0.15
+        if now >= self.blink_at + 0.16:
+            self.blink_at = now + 2.2 + (math.sin(now * 12.9898) * 0.5 + 0.5) * 3.0
+        b = 0.0
+        if self.blink_at <= now < self.blink_at + 0.16:
+            t = (now - self.blink_at) / 0.16
+            b = 1 - abs(t * 2 - 1)
+        ew, eh = 9.5 * s, 13.5 * s * (1 - 0.85 * b)
+        gap = 24 * s
+        col = theme.text(0.92 * a)
+        for side in (-1, 1):
+            ex = cx + side * gap / 2 + self.eye[0]
+            ey = cy + self.eye[1]
+            if self.happy > 0.5:
+                path = QtGui.QPainterPath()
+                path.moveTo(ex - ew / 2 - 0.5 * s, ey + 2.5 * s)
+                path.quadTo(ex, ey - 6.5 * s, ex + ew / 2 + 0.5 * s, ey + 2.5 * s)
+                p.setPen(QtGui.QPen(col, 2.6 * s, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawPath(path)
+            else:
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(col)
+                p.drawRoundedRect(QtCore.QRectF(ex - ew / 2, ey - eh / 2, ew, max(1.6 * s, eh)), ew / 2, min(ew, eh) / 2)
+                if eh > 6 * s:
+                    p.setBrush(QtGui.QColor(255, 255, 255, round(150 * a)) if not theme.dark
+                               else QtGui.QColor(40, 40, 46, round(120 * a)))
+                    p.drawEllipse(QtCore.QPointF(ex + 1.8 * s, ey - eh * 0.22), 1.6 * s, 1.6 * s)
+            base = (120, 90) if theme.dark else (60, 70)          # 深色底上腮红更亮，避免发暗
+            blush = QtGui.QColor(255, 124, 162, round((base[0] + base[1] * self.happy) * a))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(blush)
+            p.drawEllipse(QtCore.QPointF(cx + side * (gap / 2 + 9 * s) + self.eye[0] * 0.5, cy + 7 * s), 4.2 * s, 2.4 * s)
+
+
 class CompactView:
     def __init__(self):
         self.media: dict = {}
@@ -36,9 +90,7 @@ class CompactView:
         self._view_t = -10.0
         self.look = QtCore.QPointF(0, 0)      # 光标相对胶囊中心的位置（形象的眼睛会看过去）
         self.near = False                      # 光标在附近（形象开心）
-        self._eye = [0.0, 0.0]
-        self._blink_at = time.monotonic() + 2.5
-        self._happy = 0.0
+        self.pet = PetFace()
         self._bars = [0.0] * 4
         self._peak = 0.0
 
@@ -164,53 +216,8 @@ class CompactView:
         _ = cy
 
     def _paint_pet(self, p, r, a):
-        """原创小形象：两只圆润的眼睛，会眨眼、看向光标，靠近时眯成开心的弧线，带一点腮红。"""
-        now = time.monotonic()
         cx, cy = r.center().x(), r.center().y()
-        # 视线：朝光标方向，限制在小范围内
-        lx = clamp(self.look.x() / 60.0, -1, 1) * 4.5
-        ly = clamp(self.look.y() / 40.0, -1, 1) * 2.5
-        if not self.near and abs(self.look.x()) > 400:
-            # 光标很远：自己慢慢东张西望
-            lx = math.sin(now * 0.7) * 3.5
-            ly = math.sin(now * 0.43) * 1.2
-        self._eye[0] += (lx - self._eye[0]) * 0.18
-        self._eye[1] += (ly - self._eye[1]) * 0.18
-        self._happy += ((1.0 if self.near else 0.0) - self._happy) * 0.15
-        # 眨眼
-        if now >= self._blink_at + 0.16:
-            self._blink_at = now + 2.2 + (math.sin(now * 12.9898) * 0.5 + 0.5) * 3.0
-        b = 0.0
-        if self._blink_at <= now < self._blink_at + 0.16:
-            t = (now - self._blink_at) / 0.16
-            b = 1 - abs(t * 2 - 1)
-        ew, eh = 9.5, 13.5 * (1 - 0.85 * b)
-        gap = 24
-        col = theme.text(0.92 * a)
-        for side in (-1, 1):
-            ex = cx + side * gap / 2 + self._eye[0]
-            ey = cy - 1 + self._eye[1]
-            if self._happy > 0.5:
-                # 开心：^ ^
-                path = QtGui.QPainterPath()
-                path.moveTo(ex - ew / 2 - 0.5, ey + 2.5)
-                path.quadTo(ex, ey - 6.5, ex + ew / 2 + 0.5, ey + 2.5)
-                p.setPen(QtGui.QPen(col, 2.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-                p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawPath(path)
-            else:
-                p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(col)
-                p.drawRoundedRect(QtCore.QRectF(ex - ew / 2, ey - eh / 2, ew, max(1.6, eh)), ew / 2, min(ew, eh) / 2)
-                # 高光
-                if eh > 6:
-                    p.setBrush(QtGui.QColor(255, 255, 255, round(150 * a)) if not theme.dark else QtGui.QColor(40, 40, 46, round(120 * a)))
-                    p.drawEllipse(QtCore.QPointF(ex + 1.8, ey - eh * 0.22), 1.6, 1.6)
-            # 腮红
-            blush = QtGui.QColor(255, 120, 150, round((60 + 70 * self._happy) * a))
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(blush)
-            p.drawEllipse(QtCore.QPointF(cx + side * (gap / 2 + 9) + self._eye[0] * 0.5, cy + 6), 4.2, 2.4)
+        self.pet.paint(p, cx, cy - 1, 1.0, a, self.look, self.near)
         x = r.right() - 14
         self._badges(p, x, cy, a)
 

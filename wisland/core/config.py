@@ -30,6 +30,7 @@ DEFAULTS: dict = {
         "default_tab": "home",
         "pinned": False,            # 图钉：保持展开
         "compact_view": "clock",    # 收起态视图：clock / pet / music（滚轮切换）
+        "auto_cycle_s": 30,         # 时间天气与小形象自动轮换的间隔（秒），0 = 不轮换
         "passthrough": False,       # 可穿透：鼠标穿过灵动岛，只响应右键（不影响展开 / 收起）
     },
     "hotkeys": {

@@ -101,8 +101,8 @@ PALETTES = {
     # 胭脂撞色：墨黑玻璃 + 胭脂粉 FF7CA2 强调色，正文白色
     "rouge": {
         "dark": True, "text": (255, 255, 255), "t2": 0.70, "t3": 0.50,
-        "tint": (0, 0, 0, 205), "card": (255, 124, 162, 30), "hover": (255, 124, 162, 46),
-        "pill": (255, 124, 162, 110), "track": (255, 255, 255, 36), "fill": "#FF7CA2",
+        "tint": (0, 0, 0, 205), "card": (255, 255, 255, 24), "hover": (255, 255, 255, 34),
+        "pill": (255, 124, 162, 235), "pill_fg": "#000000", "track": (255, 255, 255, 36), "fill": "#FF7CA2",
         "on": "#FF7CA2", "on_fg": "#000000", "up": "#FF7CA2", "down": "#5fe0b0",
         "rim1": (255, 124, 162, 170), "rim2": (255, 124, 162, 40), "outline": (0, 0, 0, 140),
         "menu": ("rgba(8,8,10,245)", "white", "rgba(255,124,162,90)"),
@@ -209,6 +209,15 @@ class Theme(QtCore.QObject):
     def active_pill(self) -> QtGui.QColor:
         """导航当前项的圆角底。"""
         return self._c("pill")
+
+    def pill_text(self, a: float = 1.0) -> QtGui.QColor:
+        """当前项（亮色底块）上的文字颜色。"""
+        fg = self.pal.get("pill_fg")
+        if not fg:
+            return self.text(a)
+        c = QtGui.QColor(fg)
+        c.setAlphaF(max(0.0, min(1.0, a)))
+        return c
 
     def track(self) -> QtGui.QColor:
         return self._c("track")

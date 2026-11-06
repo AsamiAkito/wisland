@@ -126,7 +126,8 @@ class MediaCard(Card):
         self.play.clicked.connect(lambda: ctx.media.play_pause())
         self.prog.seek.connect(lambda s: ctx.media.seek(s))
         self.open_btn.clicked.connect(self._open_player)
-        ctrls = hbox(self.prev, self.play, self.next, None, self.open_btn, spacing=6)
+        self.open_btn.hide()
+        ctrls = hbox(self.prev, self.play, self.next, None, spacing=6)
         right = vbox(self.app, self.title, self.artist, None, self.prog, ctrls, spacing=2)
         self.setLayout(hbox(self.cover, right, spacing=8, margins=(6, 6, 14, 10)))
         self._tick = QtCore.QTimer(self, interval=500, timeout=self.prog.update)
@@ -201,7 +202,7 @@ class MediaCard(Card):
         self.prog.setVisible(has and (m.get("duration") or 0) > 0)
         for b in (self.prev, self.next, self.play):
             b.setEnabled(has)
-        self.open_btn.setVisible(not has)
+
         if m.get("playing"):
             self._tick.start()
         else:
@@ -330,6 +331,32 @@ class LaunchIcon(Hoverable):
             p.drawText(r, Qt.AlignmentFlag.AlignCenter, (self.item.get("name") or "?")[:1])
 
 
+class PetWidget(QtWidgets.QWidget):
+    """主页中间的大号小形象：眼睛跟随光标，鼠标靠近时开心。"""
+    def __init__(self, parent=None, scale: float = 2.3):
+        super().__init__(parent)
+        from ..compact import PetFace
+        self.face = PetFace()
+        self.scale = scale
+        self.setFixedWidth(round(64 * scale))
+        self._t = QtCore.QTimer(self, interval=33, timeout=self.update)
+        theme.changed.connect(self.update)
+
+    def showEvent(self, e):
+        self._t.start()
+
+    def hideEvent(self, e):
+        self._t.stop()
+
+    def paintEvent(self, e):
+        p = painter(self)
+        c = QtCore.QRectF(self.rect()).center()
+        gc = QtCore.QPointF(self.mapToGlobal(c.toPoint()))
+        look = QtCore.QPointF(QtGui.QCursor.pos()) - gc
+        near = self.rect().adjusted(-24, -24, 24, 24).contains(self.mapFromGlobal(QtGui.QCursor.pos()))
+        self.face.paint(p, c.x(), c.y() - 4, self.scale, 1.0, look, near)
+
+
 class HomePage(Page):
     key, glyph, title, height = "home", G.HOME, "主页", 226
 
@@ -337,18 +364,19 @@ class HomePage(Page):
         super().__init__(ctx)
         self.media = MediaCard(ctx)
         self.media.setFixedHeight(142)
-        self.a_trans = Action(G.TRANSLATE, "译剪贴板")
+        self.a_pin = Action(G.UNPIN, "保持展开")
+        self.a_pt = Action(G.POINTER, "可穿透")
         self.a_mute = Action(G.VOLUME, "静音")
         self.a_live = Action(G.LIVE, "实时字幕")
-        self.a_trans.clicked.connect(ctx.actions.translate_clipboard)
         self.a_mute.clicked.connect(lambda: ctx.audio.toggle_mute())
         self.a_live.clicked.connect(self._toggle_live)
         ctx.live.running_changed.connect(lambda on: self.a_live.set_on(on, None, "聆听中" if on else "实时字幕"))
         grid = QtWidgets.QGridLayout()
         grid.setSpacing(8)
-        grid.addWidget(self.a_trans, 0, 0)
-        grid.addWidget(self.a_live, 0, 1)
-        grid.addWidget(self.a_mute, 1, 0, 1, 2)
+        grid.addWidget(self.a_pin, 0, 0)
+        grid.addWidget(self.a_pt, 0, 1)
+        grid.addWidget(self.a_mute, 1, 0)
+        grid.addWidget(self.a_live, 1, 1)
         gw = QtWidgets.QWidget()
         gw.setLayout(grid)
         gw.setFixedWidth(196)
@@ -356,7 +384,8 @@ class HomePage(Page):
         self.launch_row.setSpacing(2)
         self.launch_row.setContentsMargins(0, 0, 0, 0)
         self.build_launcher()
-        lay = vbox(hbox((self.media, 1), gw, spacing=10), self.launch_row, spacing=8)
+        self.pet = PetWidget()
+        lay = vbox(hbox((self.media, 1), self.pet, gw, spacing=10), self.launch_row, spacing=8)
         self.setLayout(lay)
 
     def build_launcher(self):
@@ -367,9 +396,6 @@ class HomePage(Page):
         for item in cfg.get("launcher") or []:
             self.launch_row.addWidget(LaunchIcon(item, self._open))
         self.launch_row.addStretch(1)
-        edit = IconButton(G.GEAR, 30, 12, "编辑启动器")
-        edit.clicked.connect(lambda: os.startfile(str(cfg_path())))  # noqa: S606
-        self.launch_row.addWidget(edit)
 
     def _open(self, path, exe=None, args=None):
         res = self.ctx.windows.open_or_focus(path, exe, args)

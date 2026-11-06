@@ -336,7 +336,7 @@ class CityChip(Hoverable):
         p.setPen(theme.text(0.9))
         p.drawText(QtCore.QRectF(r.x() + 8, r.y(), 18, r.height()), Qt.AlignmentFlag.AlignCenter, self.glyph[0])
         p.setFont(ui_font(12.5, W.DemiBold))
-        p.setPen(theme.text(1.0 if self.selected else 0.75))
+        p.setPen(theme.pill_text() if self.selected else theme.text(0.75))
         fm = QtGui.QFontMetrics(p.font())
         x = r.x() + 30
         p.drawText(QtCore.QRectF(x, r.y(), 200, r.height()), Qt.AlignmentFlag.AlignVCenter, self.name)

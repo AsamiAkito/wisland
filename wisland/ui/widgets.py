@@ -465,7 +465,7 @@ class Segmented(QtWidgets.QWidget, Themed):
         p.drawRoundedRect(sel, sel.height() / 2, sel.height() / 2)
         p.setFont(ui_font(12, W.Medium))
         for i, t in enumerate(self.items):
-            p.setPen(theme.text(1.0 if i == self.index else 0.6))
+            p.setPen(theme.pill_text() if i == self.index else theme.text(0.6))
             p.drawText(QtCore.QRectF(r.x() + cw * i, r.y(), cw, r.height()), Qt.AlignmentFlag.AlignCenter, t)
 
 

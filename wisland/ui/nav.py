@@ -192,7 +192,7 @@ class NavBar(QtWidgets.QWidget):
                 p.drawRoundedRect(r, r.height() / 2, r.height() / 2)
             a = 1.0 if active else 0.55 + 0.4 * self.hover[i].x
             p.setFont(icon_font(15))
-            p.setPen(theme.text(a))
+            p.setPen(theme.pill_text() if active else theme.text(a))
             p.drawText(QtCore.QRectF(r.x(), r.y(), ICON_W, r.height()), Qt.AlignmentFlag.AlignCenter, glyph)
             # 文字：随宽度展开渐显，裁剪在本项矩形内
             extra = self.full_w[i] - ICON_W
@@ -201,7 +201,7 @@ class NavBar(QtWidgets.QWidget):
                 p.save()
                 p.setClipRect(r.adjusted(0, 0, -4, 0))
                 p.setFont(self.font_)
-                p.setPen(theme.text(prog))
+                p.setPen(theme.pill_text(prog))
                 p.drawText(QtCore.QRectF(r.x() + ICON_W - 4, r.y(), extra + 8, r.height()),
                            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, label)
                 p.restore()
