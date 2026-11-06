@@ -974,6 +974,12 @@ class Island(QtWidgets.QWidget):
         # 6) 收起状态内容
         if self.compact_a.x > 0.01:
             pk = clamp(self.poke.x, -0.5, 1.2) if (self.mode == "anchored" and not self.expanded) else 0.0
+            _horiz = self.edge in ("top", "bottom")
+            _cu = bb.center().x() if _horiz else bb.center().y()
+            _half = max(1.0, (bb.width() if _horiz else bb.height()) / 2)
+            _pp = self._poke_sm - QtCore.QPointF(self._win_origin)
+            _rel = clamp(((_pp.x() if _horiz else _pp.y()) - _cu) / _half, -1.0, 1.0) if pk > 0.005 else 0.0
+            self.compact.press = (max(0.0, pk), _rel)
             horiz = self.edge in ("top", "bottom")
             self.compact.squash = ((1 + 0.05 * pk, 1 - 0.16 * pk) if horiz else (1 - 0.16 * pk, 1 + 0.05 * pk))
             p.save()

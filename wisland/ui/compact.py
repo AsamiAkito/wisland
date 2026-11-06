@@ -47,6 +47,8 @@ class PetFace:
         self.last_attention = time.monotonic()
         self.surprise_until = 0.0
         self._t = time.monotonic()
+        self.spread = 0.0          # 被按压时两眼额外分开的距离（s=1 时的像素）
+        self.tilt = 0.0            # 被按压时每只眼向外倾斜的角度
 
     # ---------- 事件 ----------
     def react(self, kind: str = "surprise"):
@@ -143,77 +145,89 @@ class PetFace:
         pink = QtGui.QColor(255, 92, 138)
         centers = []
         for side in (-1, 1):
-            hap = clamp(self.lh.x if side < 0 else self.rh.x, 0, 1)
-            curious = 1.0 + 0.22 * max(0.0, lx * side)
-            w = base_w * (1 + 0.12 * wide) * (1 + 0.25 * b)
-            h = base_h * curious * (1 + 0.18 * wide) * (1 - 0.88 * b)
-            ex = cx + side * (gap / 2 + base_w / 2) + lx * 5.0 * s
-            ey = cy + ly * 3.0 * s + bounce
-            centers.append((ex, ey))
-            r = QtCore.QRectF(ex - w / 2, ey - h / 2, w, max(1.6 * s, h))
-            # 光晕
-            if glow_col.alpha() and a > 0.05:
-                g = QtGui.QRadialGradient(r.center(), max(r.width(), r.height()) * 0.85)
-                c1 = QtGui.QColor(pink if m == "love" else glow_col)
-                c1.setAlpha(round(85 * a))
-                c2 = QtGui.QColor(c1)
-                c2.setAlpha(0)
-                g.setColorAt(0.0, c1)
-                g.setColorAt(1.0, c2)
-                p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(g)
-                p.drawEllipse(r.center(), r.width() * 0.95, r.height() * 0.75 + 3 * s)
-            # 特殊形状：爱心 / 眯眼 ><
-            if m == "love" and morph > 0.05:
-                pulse = 1.0 + 0.08 * math.sin(now * 7)
-                p.setPen(Qt.PenStyle.NoPen)
-                hc = QtGui.QColor(pink)
-                hc.setAlphaF(a * morph)
-                p.setBrush(hc)
-                p.drawPath(self._heart(ex, ey, 15 * s * pulse * (0.6 + 0.4 * morph)))
-                continue
-            if m == "squint" and morph > 0.05:
-                pen = QtGui.QPen(eye_col, 2.6 * s, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
-                p.setPen(pen)
-                p.setBrush(Qt.BrushStyle.NoBrush)
-                d = -side                               # 左眼 ">"、右眼 "<"
-                k = 5.5 * s * morph
-                path = QtGui.QPainterPath()
-                path.moveTo(ex - d * k, ey - k)
-                path.lineTo(ex + d * k, ey)
-                path.lineTo(ex - d * k, ey + k)
-                p.drawPath(path)
-                continue
-            rad = min(w, r.height()) * 0.42
-            eye = QtGui.QPainterPath()
-            eye.addRoundedRect(r, rad, rad)
-            if tired > 0.01:
-                lid = QtGui.QPainterPath()
-                lid.addRect(QtCore.QRectF(r.left() - 2, r.top() - 2, r.width() + 4, 2 + r.height() * 0.5 * tired))
-                eye = eye.subtracted(lid)
-            if m == "pout" and morph > 0.05:
-                # 嘟嘴：内侧上眼角斜切出"小眉头"
-                lid = QtGui.QPainterPath()
-                lid.addRect(QtCore.QRectF(-r.width(), -r.height(), r.width() * 2.2, r.height() * 1.0))
-                tr = QtGui.QTransform()
-                tr.translate(r.center().x() - side * r.width() * 0.1, r.top() + r.height() * 0.32 * morph)
-                tr.rotate(side * -24 * morph)
-                eye = eye.subtracted(tr.map(lid))
-            if hap > 0.01:
-                cut_r = r.width() * 0.9
-                cc = QtCore.QPointF(r.center().x(), r.bottom() + cut_r - r.height() * 0.62 * hap)
-                lid = QtGui.QPainterPath()
-                lid.addEllipse(cc, cut_r, cut_r)
-                eye = eye.subtracted(lid)
-            if not eye.isEmpty():
-                p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(eye_col)
-                p.drawPath(eye)
-            if m == "star" and r.height() > 6 * s:
-                sc = QtGui.QColor(20, 20, 26, round(220 * a)) if not theme.dark else QtGui.QColor(30, 30, 40, round(200 * a))
-                p.setBrush(sc)
-                p.drawPath(self._sparkle(ex + 1.4 * s, ey - 2.2 * s, 3.4 * s))
-                p.drawPath(self._sparkle(ex - 2.2 * s, ey + 3.0 * s, 1.6 * s))
+            p.save()
+            try:
+                # 被按压时两只眼睛各自向外倾斜（按在中间时最明显）
+                _ex0 = cx + side * (gap / 2 + base_w / 2 + self.spread * s / 2) + self.ex.x * 5.0 * s
+                _ey0 = cy + self.ey.x * 3.0 * s
+                if abs(self.tilt) > 0.05:
+                    p.translate(_ex0, _ey0)
+                    p.rotate(side * self.tilt)
+                    p.translate(-_ex0, -_ey0)
+                hap = clamp(self.lh.x if side < 0 else self.rh.x, 0, 1)
+                curious = 1.0 + 0.22 * max(0.0, lx * side)
+                w = base_w * (1 + 0.12 * wide) * (1 + 0.25 * b)
+                h = base_h * curious * (1 + 0.18 * wide) * (1 - 0.88 * b)
+                ex = cx + side * (gap / 2 + base_w / 2 + self.spread * s / 2) + lx * 5.0 * s
+                ey = cy + ly * 3.0 * s + bounce
+                centers.append((ex, ey))
+                r = QtCore.QRectF(ex - w / 2, ey - h / 2, w, max(1.6 * s, h))
+                # 光晕
+                if glow_col.alpha() and a > 0.05:
+                    g = QtGui.QRadialGradient(r.center(), max(r.width(), r.height()) * 0.85)
+                    c1 = QtGui.QColor(pink if m == "love" else glow_col)
+                    c1.setAlpha(round(85 * a))
+                    c2 = QtGui.QColor(c1)
+                    c2.setAlpha(0)
+                    g.setColorAt(0.0, c1)
+                    g.setColorAt(1.0, c2)
+                    p.setPen(Qt.PenStyle.NoPen)
+                    p.setBrush(g)
+                    p.drawEllipse(r.center(), r.width() * 0.95, r.height() * 0.75 + 3 * s)
+                # 特殊形状：爱心 / 眯眼 ><
+                if m == "love" and morph > 0.05:
+                    pulse = 1.0 + 0.08 * math.sin(now * 7)
+                    p.setPen(Qt.PenStyle.NoPen)
+                    hc = QtGui.QColor(pink)
+                    hc.setAlphaF(a * morph)
+                    p.setBrush(hc)
+                    p.drawPath(self._heart(ex, ey, 15 * s * pulse * (0.6 + 0.4 * morph)))
+                    continue
+                if m == "squint" and morph > 0.05:
+                    pen = QtGui.QPen(eye_col, 2.6 * s, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+                    p.setPen(pen)
+                    p.setBrush(Qt.BrushStyle.NoBrush)
+                    d = -side                               # 左眼 ">"、右眼 "<"
+                    k = 5.5 * s * morph
+                    path = QtGui.QPainterPath()
+                    path.moveTo(ex - d * k, ey - k)
+                    path.lineTo(ex + d * k, ey)
+                    path.lineTo(ex - d * k, ey + k)
+                    p.drawPath(path)
+                    continue
+                rad = min(w, r.height()) * 0.42
+                eye = QtGui.QPainterPath()
+                eye.addRoundedRect(r, rad, rad)
+                if tired > 0.01:
+                    lid = QtGui.QPainterPath()
+                    lid.addRect(QtCore.QRectF(r.left() - 2, r.top() - 2, r.width() + 4, 2 + r.height() * 0.5 * tired))
+                    eye = eye.subtracted(lid)
+                if m == "pout" and morph > 0.05:
+                    # 嘟嘴：内侧上眼角斜切出"小眉头"
+                    lid = QtGui.QPainterPath()
+                    lid.addRect(QtCore.QRectF(-r.width(), -r.height(), r.width() * 2.2, r.height() * 1.0))
+                    tr = QtGui.QTransform()
+                    tr.translate(r.center().x() - side * r.width() * 0.1, r.top() + r.height() * 0.32 * morph)
+                    tr.rotate(side * -24 * morph)
+                    eye = eye.subtracted(tr.map(lid))
+                if hap > 0.01:
+                    cut_r = r.width() * 0.9
+                    cc = QtCore.QPointF(r.center().x(), r.bottom() + cut_r - r.height() * 0.62 * hap)
+                    lid = QtGui.QPainterPath()
+                    lid.addEllipse(cc, cut_r, cut_r)
+                    eye = eye.subtracted(lid)
+                if not eye.isEmpty():
+                    p.setPen(Qt.PenStyle.NoPen)
+                    p.setBrush(eye_col)
+                    p.drawPath(eye)
+                if m == "star" and r.height() > 6 * s:
+                    sc = QtGui.QColor(20, 20, 26, round(220 * a)) if not theme.dark else QtGui.QColor(30, 30, 40, round(200 * a))
+                    p.setBrush(sc)
+                    p.drawPath(self._sparkle(ex + 1.4 * s, ey - 2.2 * s, 3.4 * s))
+                    p.drawPath(self._sparkle(ex - 2.2 * s, ey + 3.0 * s, 1.6 * s))
+
+            finally:
+                p.restore()
         # 腮红
         bl = clamp(self.blush.x, 0, 1)
         if bl > 0.02:
@@ -373,7 +387,8 @@ class CompactView:
             self._paint_dots(p, r, alpha)
 
     def _paint_dots(self, p, r, alpha):
-        """切换视图后短暂显示的页码小圆点。"""
+        """（已关闭）切换视图时不显示页码小圆点。"""
+        return
         k = time.monotonic() - self._view_t
         if k > 1.4:
             return
@@ -403,8 +418,16 @@ class CompactView:
     def _paint_pet(self, p, r, a):
         cx, cy = r.center().x(), r.center().y()
         sx, sy = getattr(self, "squash", (1.0, 1.0))
+        amount, rel = getattr(self, "press", (0.0, 0.0))
+        amount = clamp(amount, 0.0, 1.2)
+        side_w = abs(rel)                     # 0 = 按在中间，1 = 按在一端
+        lean = -rel * min(1.0, amount * 1.6)   # 向没被按的一侧倾斜
+        self.pet.spread = amount * (1 - side_w) * 9.0
+        self.pet.tilt = amount * (1 - side_w) * 14.0
         p.save()
         p.translate(cx, cy)
+        p.translate(lean * 24.0, 0)            # 明显地偏向没被按的一侧
+        p.rotate(lean * 18.0)
         p.scale(sx, sy)                       # 灵动岛被按压时表情一起被压扁
         p.translate(-cx, -cy)
         self.pet.paint(p, cx, cy - 1, 1.0, a, self.look, self.near)
