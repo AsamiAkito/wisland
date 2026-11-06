@@ -341,6 +341,7 @@ class Island(QtWidgets.QWidget):
         if not self.expanded:
             self.expanded = True
             self.compact_a.to(0, 900, 1.0)
+            self.poke.snap(0.0)                       # 展开时清掉按压形变
             w, h = self.target_size()
             self.sw.to(w, 420, 0.62)
             self.sh.to(h, 420, 0.62)
@@ -998,8 +999,8 @@ class Island(QtWidgets.QWidget):
             return
         inside = self._inside(QtGui.QCursor.pos())
         now = time.monotonic()
-        if self.passthrough() and not self.expanded:
-            # 可穿透：鼠标掠过时把水滴"挤"一下，离开后带回弹地恢复
+        if not self.expanded and self.mode == "anchored" and not self._fs_hidden:
+            # 收起时（任何展开方式）：鼠标靠近就把水滴"挤"一下，离开后带回弹地恢复
             gp = QtCore.QPointF(QtGui.QCursor.pos())
             lp = gp - QtCore.QPointF(self._win_origin)
             near = self.body.adjusted(-28, -28, 28, 28).contains(lp)
