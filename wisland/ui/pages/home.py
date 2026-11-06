@@ -401,7 +401,7 @@ class PetWidget(QtWidgets.QWidget):
         from ..compact import PetFace
         self.face = PetFace()
         self.scale = scale
-        self.setMinimumWidth(round(64 * scale))
+        self.setFixedWidth(round(64 * scale))
         self._t = QtCore.QTimer(self, interval=33, timeout=self.update)
         theme.changed.connect(self.update)
 
@@ -481,14 +481,12 @@ class HomePage(Page):
         grid.addWidget(self.a_live, 1, 1)
         gw = QtWidgets.QWidget()
         gw.setLayout(grid)
-        gw.setFixedWidth(172)
+        gw.setFixedWidth(196)
         self.strip = LaunchStrip()
         self.launch_row = self.strip.row
         self.build_launcher()
         self.pet = PetWidget()
-        self.media.setFixedWidth(236)
-        # 播放卡与右侧按钮收窄，小形象居中，两边留出更大的空间
-        lay = vbox(hbox(self.media, (self.pet, 1), gw, spacing=10), self.strip, spacing=8)
+        lay = vbox(hbox((self.media, 1), self.pet, gw, spacing=10), self.strip, spacing=8)
         self.setLayout(lay)
 
     def build_launcher(self):
