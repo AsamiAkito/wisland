@@ -740,17 +740,19 @@ class Island(QtWidgets.QWidget):
             wave = None
             if poking:
                 ppt = self._poke_pt - QtCore.QPointF(wx, wy)
-                amp = self.poke.x * 6.5
-                sig2 = 2 * 60.0 ** 2
-
+                amp = clamp(abs(self.poke.x), 0, 1) * 3.6
+                tt = t_now
                 farv = {"top": (0, 1), "bottom": (0, -1), "left": (1, 0), "right": (-1, 0)}[self.edge]
+                horiz = farv[0] == 0
+                u0 = ppt.x() if horiz else ppt.y()
 
-                def poke_w(px, py, nx, ny, ppt=ppt, amp=amp, sig2=sig2, farv=farv):
-                    wgt = nx * farv[0] + ny * farv[1]       # 只让远离屏幕边的一侧被挤压
+                def poke_w(px, py, nx, ny, amp=amp, farv=farv, horiz=horiz, u0=u0, tt=tt):
+                    wgt = nx * farv[0] + ny * farv[1]       # 只在远离屏幕边的一侧起伏，两侧与贴边处不动
                     if wgt <= 0.2:
                         return 0.0
-                    d2 = (px - ppt.x()) ** 2 + (py - ppt.y()) ** 2
-                    return -amp * wgt * wgt * math.exp(-d2 / sig2)      # 正 = 向内凹，负 = 回弹外鼓
+                    d = abs((px if horiz else py) - u0)
+                    # 从触点向左右扩散的水波：越远越弱
+                    return amp * wgt * wgt * math.cos(d * 0.085 - tt * 9.0) * math.exp(-d / 110.0)
                 wave = poke_w
             if playing_wave:
                 pk = clamp(self.peak_fn() * 1.5, 0, 1)
@@ -950,7 +952,13 @@ class Island(QtWidgets.QWidget):
             p.strokePath(path, QtGui.QPen(QtGui.QBrush(rad), 1.0))
         # 6) 收起状态内容
         if self.compact_a.x > 0.01:
+            pk = clamp(self.poke.x, -0.5, 1.2) if (self.mode == "anchored" and not self.expanded) else 0.0
+            horiz = self.edge in ("top", "bottom")
+            self.compact.squash = ((1 + 0.07 * pk, 1 - 0.24 * pk) if horiz else (1 - 0.24 * pk, 1 + 0.07 * pk))
+            p.save()
+            p.setClipPath(path)               # 内容（含表情）不超出灵动岛
             self.compact.paint(p, bb, self.compact_a.x, self.peak_fn() if self.compact.mode() == "media" else 0.0)
+            p.restore()
         p.end()
 
     # ================================================================ 鼠标

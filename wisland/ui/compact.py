@@ -356,7 +356,7 @@ class CompactView:
         a = alpha * fade
         self._peak = self._peak * 0.6 + peak * 0.4
         p.save()
-        p.setClipRect(r.adjusted(6, 0, -6, 0))
+        p.setClipRect(r.adjusted(6, 0, -6, 0), Qt.ClipOperation.IntersectClip)
         if m == "activity":
             self._paint_activity(p, r, a)
         elif m == "media":
@@ -402,7 +402,13 @@ class CompactView:
 
     def _paint_pet(self, p, r, a):
         cx, cy = r.center().x(), r.center().y()
+        sx, sy = getattr(self, "squash", (1.0, 1.0))
+        p.save()
+        p.translate(cx, cy)
+        p.scale(sx, sy)                       # 灵动岛被按压时表情一起被压扁
+        p.translate(-cx, -cy)
         self.pet.paint(p, cx, cy - 1, 1.0, a, self.look, self.near)
+        p.restore()
         x = r.right() - 14
         self._badges(p, x, cy, a)
 
