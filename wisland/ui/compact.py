@@ -25,10 +25,10 @@ class PetFace:
 
     常态：默认（东张西望）· 好奇（看向哪边那只眼变高）· 困倦（一分钟没人理）· 眨眼 · 惊讶（新消息）。
     鼠标靠近时随机换一种表情（不与上次重复）：
-      开心 · 眨眼 · 爱心 · 星星眼 · 害羞 · 大笑 · 嘟嘴 · 眯眼
+      开心 · 眨眼 · 爱心 · 星星眼 · 害羞 · 嘟嘴 · 眯眼
     s 为缩放（灵动岛上 1.0，主页上更大）。"""
 
-    MOODS = ["happy", "wink", "love", "star", "shy", "laugh", "pout", "squint"]
+    MOODS = ["happy", "wink", "love", "star", "shy", "pout", "squint"]
 
     def __init__(self):
         from .anim import Spring
