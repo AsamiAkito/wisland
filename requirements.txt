@@ -16,3 +16,7 @@ SoundCard>=0.4,<1
 soxr>=0.3,<1
 sherpa-onnx>=1.12,<2
 huggingface-hub>=0.24,<2
+# 查词 / 单词本 / Anki
+fugashi>=1.3,<2
+unidic-lite>=1.0.8,<2
+genanki>=0.13,<1

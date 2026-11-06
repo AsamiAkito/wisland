@@ -90,9 +90,22 @@ class LiveService(QtCore.QObject):
         p.start()
         self.running_changed.emit(True)
 
+    def clip(self, sid: str):
+        for pipe in (self.pipe, getattr(self, "_last_pipe", None)):
+            if pipe is not None and sid:
+                try:
+                    a = pipe.get_clip(sid)
+                    if a is not None:
+                        return a
+                except Exception:  # noqa: BLE001
+                    pass
+        return None
+
     def stop(self, wait: bool = False):
         """停止聆听。等待音频线程结束放到后台，不阻塞界面（退出程序时 wait=True）。"""
         p, self.pipe = self.pipe, None
+        if p is not None:
+            self._last_pipe = p
         self._finished()
         if p is None:
             return

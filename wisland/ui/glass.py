@@ -108,6 +108,9 @@ class Backdrop(QtCore.QObject):
         self._wake = threading.Event()
         self._stop = False
         self._thread = threading.Thread(target=self._run, name="wisland-glass", daemon=True)
+        # 参与屏幕捕获时：只在自己截取背景的那一瞬间把灵动岛排除，截完立即恢复
+        self.hwnd = 0
+        self.self_exclude = False
         self._started = False
 
     def start(self):
@@ -176,7 +179,14 @@ class Backdrop(QtCore.QObject):
 
     def _capture(self, r: QtCore.QRect, phys):
         tw, th = max(2, r.width() // DOWN), max(2, r.height() // DOWN)
-        img = grab_tiny(phys[0], phys[1], phys[2], phys[3], tw, th)
+        toggle = self.self_exclude and self.hwnd
+        if toggle:
+            _u32.SetWindowDisplayAffinity(self.hwnd, WDA_EXCLUDEFROMCAPTURE)
+        try:
+            img = grab_tiny(phys[0], phys[1], phys[2], phys[3], tw, th)
+        finally:
+            if toggle:
+                _u32.SetWindowDisplayAffinity(self.hwnd, 0)
         if img is None:
             return
         img = img.convertToFormat(QtGui.QImage.Format.Format_ARGB32_Premultiplied)

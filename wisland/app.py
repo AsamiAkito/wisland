@@ -135,6 +135,8 @@ def main():
     ctx.mailcheck = MailCheckService()
     from .live.service import LiveService
     ctx.live = LiveService()
+    from .learn.service import LearnService
+    ctx.learn = LearnService()
     ctx.actions = Actions(ctx)
     ctx.notify.opener = lambda path: ctx.windows.open_or_focus(path)
     ctx.windows.notice.connect(lambda t: ctx.island and ctx.island.activity({"glyph": _G().MESSAGE, "title": t}, 5.0))
@@ -267,6 +269,7 @@ def main():
         island._kick()
     ctx.live.live_zh.connect(on_sub)
     ctx.live.final_zh.connect(on_sub)
+    ctx.learn.notice.connect(lambda t: island.activity({"glyph": _G().CHECK, "title": t}, 2.6))
     ctx.live.error.connect(lambda m: island.activity({"glyph": G.LIVE, "title": "实时字幕", "sub": m}, 4))
 
     # ---------------- 热键 ----------------
@@ -299,6 +302,8 @@ def main():
         a.triggered.connect(lambda: island.set_pinned(not island.pinned()))
         a = menu.addAction(("✓  " if island.passthrough() else "    ") + "可穿透")
         a.triggered.connect(lambda: island.set_passthrough(not island.passthrough()))
+        a = menu.addAction(("✓  " if island.capture_visible() else "    ") + "参与截图")
+        a.triggered.connect(lambda: island.set_capture_visible(not island.capture_visible()))
         a = menu.addAction(("✓  " if autostart_enabled() else "    ") + "开机自启")
         a.triggered.connect(lambda: set_autostart(not autostart_enabled()))
         menu.addAction("打开数据目录").triggered.connect(lambda: os.startfile(str(DATA_DIR)))  # noqa: S606
@@ -366,7 +371,7 @@ def main():
     # ---------------- 启动 ----------------
     island.show()
     for s in (ctx.media, ctx.audio, ctx.brightness, ctx.radio, ctx.windows, ctx.notify, ctx.stocks,
-              ctx.weather, ctx.clash, ctx.translate, ctx.clipboard, ctx.mailcheck):
+              ctx.weather, ctx.clash, ctx.translate, ctx.clipboard, ctx.mailcheck, ctx.learn):
         try:
             if hasattr(s, "start"):
                 s.start()
@@ -377,7 +382,7 @@ def main():
     def shutdown():
         ctx.live.stop(wait=True)
         for s in (ctx.media, ctx.audio, ctx.brightness, ctx.radio, ctx.notify, ctx.stocks,
-                  ctx.weather, ctx.clash, ctx.translate, ctx.clipboard, ctx.mailcheck):
+                  ctx.weather, ctx.clash, ctx.translate, ctx.clipboard, ctx.mailcheck, ctx.learn):
             try:
                 s.stop()
             except Exception:  # noqa: BLE001

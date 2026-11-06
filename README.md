@@ -9,8 +9,8 @@ Python 3.12 + PySide6 的 Windows 灵动岛：贴在屏幕边缘的液态毛玻�
 uv venv --python 3.12 .venv
 uv pip install --python .venv/Scripts/python.exe -r requirements.txt
 copy config.example.json config.json
-# 可选：实时日语字幕需要的识别模型（约 630MB，下载到 models/）
-.venv\Scripts\python.exe scripts\download_models.py
+# 可选：实时日语字幕需要的识别模型（约 630MB，下载到 models/）；加 --dict 同时下载查词词典
+.venv\Scripts\python.exe scripts\download_models.py --dict
 ```
 
 ## 启动
@@ -43,7 +43,8 @@ copy config.example.json config.json
 - **天气**：OpenWeather，多城市
 - **控制**：音量、亮度、WLAN、蓝牙、系统代理、Clash Verge（模式 / 节点 / TUN / 网速）
 - **剪贴板**：最近 10 条，点击复制
-- **翻译**：日译中文本翻译（DeepSeek）；**实时字幕**：抓取系统声音 → 静音检测断句 → Parakeet 日语识别 → DeepSeek 翻译
+- **翻译**：日译中文本翻译（DeepSeek）；**实时字幕**：抓取系统声音 → 静音检测断句 → Parakeet 日语识别 → DeepSeek 翻译；
+  点字幕里的日语单词查词（Jitendex 中文 / JMdict），一键加入**单词本**（含例句与原声片段），同步到 **Anki**（AnkiConnect）或导出 `.apkg`
 
 ## 需要你配置的（`config.json`）
 
@@ -56,13 +57,15 @@ copy config.example.json config.json
   `GET /api/minute?code=…`（分时）。`stocks.pct_alert` 涨跌幅提醒阈值（默认 3%，每跨过一个倍数提醒一次）；
   `stocks.alerts` 价格提醒，如 `{"sh600000": {"above": 12, "below": 9}}`
 - **翻译 / 实时字幕**：`translate.api_key` 填 DeepSeek API Key；实时字幕的识别参数在 `live.*`（模型目录 `live.models_dir`，默认 `models`）
+- **Anki**：`learn.deck` 牌组名；`learn.ankiconnect_url` 留空为本机（需在 Anki 安装 AnkiConnect 插件 2055492159），
+  AnkiConnect Android 填 `手机IP:8765`；`learn.auto_sync` 自动同步；`learn.screenshot` + `learn.player_title` 加词时截播放器画面作配图
 - **邮件（不开 Thunderbird）**：`mail.imap` 会自动列出 Thunderbird 里的 IMAP 账户，给需要的账户填入 `password`（QQ / 163 用授权码，Gmail 用应用专用密码）。Thunderbird 运行时由它自己提醒。
 - **主题**：`island.theme` = `auto`（按身后画面亮度在浅色 / 深色间切换）/ `light` / `dark` / `rouge`（胭脂粉 #FF7CA2 × 墨黑 撞色）/ `sky`（晴空亮蓝 #32ABFD → 柔白浅杏 #F7EFE1 渐变），也可在右键菜单 → 主题里切换
 
 ## 说明与限制
 
-- **截图里看不到灵动岛**：毛玻璃是灵动岛自己截取身后画面再模糊出来的。如果它出现在截图里，就会截到自己（反馈闪烁），
-  所以窗口设置了「不参与屏幕捕获」（`island.exclude_from_capture`）。
+- **截图 / 录屏**：默认参与屏幕捕获。毛玻璃取身后画面时只在那约 17ms 内临时把自己排除（静止时每秒约一次），
+  所以极少数截图帧里可能缺灵动岛；右键菜单「参与截图」可关闭（关闭后截图里永远看不到灵动岛，但毛玻璃刷新更及时）。
 - 微信在托盘时，点微信会发送微信自己的「显示窗口」快捷键（默认 Ctrl+Alt+W，可在 `apps.restore_hotkey` 修改），不会再开新实例。
 - 微信没有使用系统通知，只能通过任务栏闪烁检测：微信窗口已打开（或最小化）时可靠，完全隐藏到托盘时可能收不到。
 - QQ / Thunderbird 依赖它们弹出的 Windows 通知（请保持系统通知开启）；Thunderbird 另有收件箱文件变化的兜底检测。
@@ -72,7 +75,7 @@ copy config.example.json config.json
 
 ## 致谢
 
-实时字幕的识别 / 翻译流水线（`wisland/live/`）移植自 [YishengTranslator-White](https://github.com/kayson-39/YishengTranslator-White)
+实时字幕的识别 / 翻译流水线（`wisland/live/`）与查词 / 单词本 / Anki（`wisland/learn/`）移植自 [YishengTranslator-White](https://github.com/kayson-39/YishengTranslator-White)
 （MIT 许可，见 `wisland/live/LICENSE-YishengTranslator.txt`）。日语识别模型：NVIDIA Parakeet（sherpa-onnx 转换版）；静音检测：Silero VAD。
 
 ## 许可

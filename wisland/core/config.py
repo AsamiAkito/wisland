@@ -24,7 +24,7 @@ DEFAULTS: dict = {
         "hide_fullscreen": False,      # True = 前台全屏（游戏/视频）时隐藏灵动岛
         "hover_expand_ms": 120,
         "collapse_delay_ms": 320,
-        "exclude_from_capture": True,   # 毛玻璃需要：灵动岛不出现在截图里，才能截到身后的画面
+        "exclude_from_capture": False,  # False = 灵动岛出现在截图 / 录屏里（取背景时只临时排除自己）
         "blur_fps": 8,
         "scale": 1.0,
         "default_tab": "home",
@@ -110,6 +110,14 @@ DEFAULTS: dict = {
                 "final_engine": "parakeet", "final_threads": 6, "max_segment_s": 10, "context_prompt": False},
         "translate": {"enabled": True, "live": True, "live_min_interval_ms": 900, "live_min_new_chars": 4,
                       "context_lines": 3},
+    },
+    "learn": {
+        "deck": "日语::生词",          # Anki 牌组
+        "ankiconnect_url": "",        # 留空 = 本机 127.0.0.1:8765；AnkiConnect Android 填 手机IP:8765
+        "auto_sync": False,           # 加词后 / 每 20 秒自动推送到 Anki（Anki 开着时）
+        "screenshot": False,          # 加词时截取播放器画面作为卡片配图
+        "player_title": "",           # 播放器窗口标题关键字（截图用），如 "Kazumi"
+        "source": "",
     },
     "clipboard": {"max": 10},      # 只保留最近 10 条（置顶的不计）
     "launcher": [

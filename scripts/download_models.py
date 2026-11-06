@@ -43,6 +43,15 @@ def main() -> int:
                 break
             except Exception as e:  # noqa: BLE001
                 print("  失败：", e)
+    if "--dict" in sys.argv:
+        sys.path.insert(0, str(ROOT))
+        from wisland.learn import dictionary
+        from wisland.learn.dict_download import download_recommended
+        print("下载词典 …")
+        d = dictionary.get()
+        for z in download_recommended(print):
+            print("导入", z.name)
+            d.import_yomitan(z)
     ok = (dest / "model.int8.onnx").exists() and vad.exists()
     print("完成" if ok else "未完成，请检查网络后重试")
     return 0 if ok else 1

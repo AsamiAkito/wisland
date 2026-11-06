@@ -512,10 +512,39 @@ class WeatherPage(Page):
         self.add_edit.show()
         self.want_focus()
         self.add_edit.setFocus()
+        # 点到输入框以外的任何地方就取消（灵动岛内外都算）
+        import ctypes
+        u32 = ctypes.WinDLL("user32")
+        st = {"armed": False}
+        if getattr(self, "_add_watch", None) is None:
+            self._add_watch = QtCore.QTimer(self, interval=25)
+
+        def tick():
+            if not self.add_edit.isVisible():
+                self._add_watch.stop()
+                return
+            down = any(u32.GetAsyncKeyState(k) & 0x8000 for k in (0x01, 0x02))
+            if not st["armed"]:
+                st["armed"] = not down
+                return
+            if down:
+                r = QtCore.QRect(self.add_edit.mapToGlobal(QtCore.QPoint(0, 0)), self.add_edit.size())
+                if not r.contains(QtGui.QCursor.pos()):
+                    self._end_add()
+        try:
+            self._add_watch.timeout.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        self._add_watch.timeout.connect(tick)
+        self._add_watch.start()
 
     def _end_add(self):
         self.add_edit.hide()
         self.add_btn.show()
+        if getattr(self, "_add_watch", None) is not None:
+            self._add_watch.stop()
+        if self.island is not None:
+            self.island.release_focus()
 
     def _do_add(self):
         q = self.add_edit.text().strip()

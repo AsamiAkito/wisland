@@ -857,6 +857,10 @@ class Island(QtWidgets.QWidget):
         else:
             fps = max(2.0, float(cfg.get("island.blur_fps", 10)))
             interval = 1 / (fps if self.expanded else min(fps, 3.0))   # 收起静止时身后画面变化不敏感
+            if self.capture_visible():
+                # 参与截图时，每次取背景都要临时把自己排除约 17ms：静止时降低频率，
+                # 让截图 / 录屏几乎总能拍到灵动岛（动画、拖动时仍高频刷新）
+                interval = 1 / (1.5 if self.expanded else 1.0)
         need = self.path.boundingRect().toAlignedRect().translated(self._win_origin).intersected(self.scr.geometry())
         self.backdrop.request(self.scr, g, interval, urgent=not self.backdrop.covers(need))
 
@@ -1050,6 +1054,22 @@ class Island(QtWidgets.QWidget):
         else:
             self._rhook.remove()
 
+    def capture_visible(self) -> bool:
+        return not bool(cfg.get("island.exclude_from_capture", False))
+
+    def set_capture_visible(self, on: bool):
+        cfg.set("island.exclude_from_capture", not on)
+        self.apply_capture_mode()
+
+    def apply_capture_mode(self):
+        """参与屏幕捕获：截图 / 录屏里能看到灵动岛；毛玻璃取背景时只在那一瞬间临时排除自己。
+        不参与：一直排除（截图里看不到灵动岛）。"""
+        hwnd = int(self.winId())
+        visible = self.capture_visible()
+        exclude_from_capture(hwnd, not visible)
+        self.backdrop.hwnd = hwnd
+        self.backdrop.self_exclude = visible
+
     def pinned(self) -> bool:
         return bool(cfg.get("island.pinned", False))
 
@@ -1102,8 +1122,7 @@ class Island(QtWidgets.QWidget):
         hwnd = int(self.winId())
         ex = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
         user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | WS_EX_NOACTIVATE)
-        if cfg.get("island.exclude_from_capture", True):
-            exclude_from_capture(hwnd, True)
+        self.apply_capture_mode()
         if not self._shell_msg:
             self._shell_msg = user32.RegisterWindowMessageW("SHELLHOOK")
             user32.RegisterShellHookWindow(hwnd)

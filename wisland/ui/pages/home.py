@@ -104,12 +104,74 @@ class CoverView(QtWidgets.QWidget):
             p.drawPixmap(r.toRect(), self.pm)
 
 
+class CoverTitle(QtWidgets.QWidget):
+    """封面在上方居中（正对播放键），标题压在封面下沿、向两侧延伸，但不超出播放卡片。"""
+    COVER = 58
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.pm: QtGui.QPixmap | None = None
+        self.glow = QtGui.QColor(255, 255, 255, 0)
+        self.h = 0.0
+        self.title = "未在播放"
+        self.sub = ""
+        self.setFixedHeight(self.COVER + 30)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Fixed)
+        theme.changed.connect(self.update)
+
+    def set_pixmap(self, pm, glow):
+        self.pm = pm
+        self.glow = glow or QtGui.QColor(255, 255, 255, 0)
+        self.update()
+
+    def set_text(self, title, sub):
+        self.title, self.sub = title, sub
+        self.update()
+
+    def paintEvent(self, e):
+        p = painter(self)
+        W_ = self.width()
+        s = 1.0 + 0.07 * self.h
+        size = self.COVER * s
+        cr = QtCore.QRectF(0, 0, size, size)
+        cr.moveCenter(QtCore.QPointF(W_ / 2, 4 + self.COVER / 2 - 2.5 * self.h))
+        if self.h > 0.01 and self.glow.alpha():
+            g = QtGui.QRadialGradient(cr.center() + QtCore.QPointF(0, 6), cr.width() * 0.8)
+            c1 = QtGui.QColor(self.glow)
+            c1.setAlpha(round(150 * self.h))
+            c2 = QtGui.QColor(self.glow)
+            c2.setAlpha(0)
+            g.setColorAt(0, c1)
+            g.setColorAt(1, c2)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(g)
+            p.drawEllipse(cr.adjusted(-10, -6, 10, 14))
+        if self.pm is not None:
+            p.drawPixmap(cr.toRect(), self.pm)
+        # 标题：压住封面下沿，左右延伸（限制在卡片内），底下垫一块半透明玻璃保证可读
+        f = ui_font(13.5, W.DemiBold)
+        fm = QtGui.QFontMetrics(f)
+        text = self.title + (f"  ·  {self.sub}" if self.sub else "")
+        maxw = W_ - 16
+        text = fm.elidedText(text, Qt.TextElideMode.ElideRight, int(maxw - 20))
+        tw = fm.horizontalAdvance(text) + 20
+        tr = QtCore.QRectF((W_ - tw) / 2, cr.bottom() - 12, tw, fm.height() + 8)
+        bg = QtGui.QColor(theme.tint())
+        bg.setAlpha(min(255, bg.alpha() + 90))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(bg)
+        p.drawRoundedRect(tr, tr.height() / 2, tr.height() / 2)
+        p.setFont(f)
+        p.setPen(theme.text())
+        p.drawText(tr, Qt.AlignmentFlag.AlignCenter, text)
+
+
 class MediaCard(Card):
     def __init__(self, ctx, parent=None):
         super().__init__(parent, 20)
         self.ctx = ctx
         self.cover_px: QtGui.QPixmap | None = None
-        self.cover = CoverView(84, self)
+        self.cover = CoverTitle(self)
         self._hov = Spring(0, 260, 0.6, 0.004)
         self._ht = QtCore.QTimer(self, interval=16, timeout=self._hover_tick)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover)
@@ -127,9 +189,11 @@ class MediaCard(Card):
         self.prog.seek.connect(lambda s: ctx.media.seek(s))
         self.open_btn.clicked.connect(self._open_player)
         self.open_btn.hide()
-        ctrls = hbox(self.prev, self.play, self.next, None, spacing=6)
-        right = vbox(self.app, self.title, self.artist, None, self.prog, ctrls, spacing=2)
-        self.setLayout(hbox(self.cover, right, spacing=8, margins=(6, 6, 14, 10)))
+        self.title.hide()
+        self.artist.hide()
+        self.app.hide()
+        ctrls = hbox(None, self.prev, self.play, self.next, None, spacing=8)   # 播放键正对封面
+        self.setLayout(vbox(self.cover, self.prog, ctrls, None, spacing=0, margins=(10, 6, 10, 6)))
         self._tick = QtCore.QTimer(self, interval=500, timeout=self.prog.update)
         self._set_cover(None)
 
@@ -166,7 +230,7 @@ class MediaCard(Card):
             self.ctx.windows.open_or_focus(expand(it["path"]), it.get("exe"))
 
     def _set_cover(self, img):
-        px = rounded_pixmap(img, 84, 16) if img is not None else None
+        px = rounded_pixmap(img, 58, 13) if img is not None else None
         glow = None
         if img is not None:
             q = img if isinstance(img, QtGui.QImage) else img.toImage()
@@ -174,14 +238,14 @@ class MediaCard(Card):
             h, s_, v, _ = glow.getHsv()
             glow = QtGui.QColor.fromHsv(max(0, h), min(255, int(s_ * 1.4) + 40), max(170, v))
         if px is None:
-            pm = QtGui.QPixmap(168, 168)
+            pm = QtGui.QPixmap(116, 116)
             pm.fill(Qt.GlobalColor.transparent)
             p = QtGui.QPainter(pm)
             p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(theme.card(1.6))
-            p.drawRoundedRect(QtCore.QRectF(0, 0, 168, 168), 32, 32)
-            p.setFont(icon_font(56))
+            p.drawRoundedRect(QtCore.QRectF(0, 0, 116, 116), 26, 26)
+            p.setFont(icon_font(44))
             p.setPen(theme.text(0.6))
             p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, G.MUSIC)
             p.end()
@@ -194,12 +258,11 @@ class MediaCard(Card):
 
     def set_media(self, m: dict):
         has = bool(m.get("has_session") and m.get("title"))
-        self.title.setText(m.get("title") or "未在播放")
-        self.artist.setText(m.get("artist") or "")
-        self.app.setText(m.get("app_name") or "")
+        self.cover.set_text(m.get("title") or "未在播放", m.get("artist") or "")
         self.play.set_glyph(G.PAUSE if m.get("playing") else G.PLAY)
         self.prog.set_state(m)
-        self.prog.setVisible(has and (m.get("duration") or 0) > 0)
+        self.prog.setVisible(True)
+        self.prog.setEnabled(has and (m.get("duration") or 0) > 0)
         for b in (self.prev, self.next, self.play):
             b.setEnabled(has)
 
@@ -357,13 +420,52 @@ class PetWidget(QtWidgets.QWidget):
         self.face.paint(p, c.x(), c.y() - 4, self.scale, 1.0, look, near)
 
 
+class LaunchStrip(QtWidgets.QScrollArea):
+    """启动器横条：应用多到放不下时，滚轮横向平滑滚动（不显示滚动条）。"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setWidgetResizable(True)
+        self.setFixedHeight(46)
+        self.viewport().setAutoFillBackground(False)
+        self.setStyleSheet("QScrollArea{background:transparent;border:none}")
+        self.viewport().setStyleSheet("background:transparent")
+        self.inner = QtWidgets.QWidget()
+        self.inner.setObjectName("stripInner")
+        self.inner.setStyleSheet("#stripInner{background:transparent}")
+        self.setWidget(self.inner)
+        self.inner.setAutoFillBackground(False)
+        self.row = QtWidgets.QHBoxLayout(self.inner)
+        self.row.setContentsMargins(0, 0, 0, 0)
+        self.row.setSpacing(2)
+        self._anim = QtCore.QPropertyAnimation(self.horizontalScrollBar(), b"value", self)
+        self._anim.setDuration(220)
+        self._anim.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
+
+    def wheelEvent(self, e):
+        bar = self.horizontalScrollBar()
+        if bar.maximum() <= 0:
+            e.ignore()
+            return
+        d = e.angleDelta().y() or e.angleDelta().x()
+        start = self._anim.endValue() if self._anim.state() == QtCore.QAbstractAnimation.State.Running else bar.value()
+        target = max(0, min(bar.maximum(), int(start) - d))
+        self._anim.stop()
+        self._anim.setStartValue(bar.value())
+        self._anim.setEndValue(target)
+        self._anim.start()
+        e.accept()
+
+
 class HomePage(Page):
-    key, glyph, title, height = "home", G.HOME, "主页", 226
+    key, glyph, title, height = "home", G.HOME, "主页", 240
 
     def __init__(self, ctx):
         super().__init__(ctx)
         self.media = MediaCard(ctx)
-        self.media.setFixedHeight(142)
+        self.media.setFixedHeight(156)
         self.a_pin = Action(G.UNPIN, "保持展开")
         self.a_pt = Action(G.POINTER, "可穿透")
         self.a_mute = Action(G.VOLUME, "静音")
@@ -380,12 +482,11 @@ class HomePage(Page):
         gw = QtWidgets.QWidget()
         gw.setLayout(grid)
         gw.setFixedWidth(196)
-        self.launch_row = QtWidgets.QHBoxLayout()
-        self.launch_row.setSpacing(2)
-        self.launch_row.setContentsMargins(0, 0, 0, 0)
+        self.strip = LaunchStrip()
+        self.launch_row = self.strip.row
         self.build_launcher()
         self.pet = PetWidget()
-        lay = vbox(hbox((self.media, 1), self.pet, gw, spacing=10), self.launch_row, spacing=8)
+        lay = vbox(hbox((self.media, 1), self.pet, gw, spacing=10), self.strip, spacing=8)
         self.setLayout(lay)
 
     def build_launcher(self):

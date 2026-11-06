@@ -6,6 +6,7 @@ import time
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from ...core.config import cfg
 from ..theme import G, W, icon_font, theme, ui_font
 from ..widgets import (Segmented, Card, Hoverable, IconButton, Label, LineEdit, PillButton, ScrollArea, TextEdit, hbox, painter,
                        vbox)
@@ -25,15 +26,15 @@ class ClipRow(Hoverable):
         self.flash = 0.0
         th = item.get("thumb")
         self.pm = QtGui.QPixmap.fromImage(th) if isinstance(th, QtGui.QImage) and not th.isNull() else None
-        self.setFixedHeight(64 if self.pm is not None else 46)
+        self.setFixedHeight(118)
         self.setMouseTracking(True)
         self._hot = None
 
     def _pin_rect(self):
-        return QtCore.QRectF(self.width() - 62, (self.height() - 26) / 2, 26, 26)
+        return QtCore.QRectF(self.width() - 66, self.height() - 34, 26, 26)
 
     def _del_rect(self):
-        return QtCore.QRectF(self.width() - 32, (self.height() - 26) / 2, 26, 26)
+        return QtCore.QRectF(self.width() - 36, self.height() - 34, 26, 26)
 
     def mouseMoveEvent(self, e):
         hot = "pin" if self._pin_rect().contains(e.position()) else "del" if self._del_rect().contains(e.position()) else None
@@ -65,38 +66,56 @@ class ClipRow(Hoverable):
     def paintEvent(self, e):
         p = painter(self)
         r = QtCore.QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        s = self.press_scale()
+        sc = self.press_scale()
         p.translate(r.center())
-        p.scale(s, s)
+        p.scale(sc, sc)
         p.translate(-r.center())
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(theme.active_pill() if self.flash else theme.card(0.7 + 0.8 * self._hover.x))
-        p.drawRoundedRect(r, 14, 14)
-        x = r.x() + 12
-        if self.pm is not None:
-            ir = QtCore.QRectF(x, r.y() + 6, 74, r.height() - 12)
+        p.setBrush(theme.active_pill() if self.flash else theme.card(0.75 + 0.8 * self._hover.x))
+        p.drawRoundedRect(r, 18, 18)
+        body = QtCore.QRectF(r.x() + 12, r.y() + 12, r.width() - 24, r.height() - 48)
+        if self.flash:
+            p.setFont(ui_font(14, W.DemiBold))
+            p.setPen(theme.pill_text())
+            p.drawText(body, Qt.AlignmentFlag.AlignCenter, "已复制")
+        elif self.pm is not None:
             path = QtGui.QPainterPath()
-            path.addRoundedRect(ir, 8, 8)
+            path.addRoundedRect(body, 10, 10)
             p.save()
             p.setClipPath(path)
-            sc = self.pm.scaled(ir.size().toSize() * 2, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                                Qt.TransformationMode.SmoothTransformation)
-            sc.setDevicePixelRatio(2)
-            p.drawPixmap(ir.topLeft(), sc)
+            img = self.pm.scaled(body.size().toSize() * 2, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                                 Qt.TransformationMode.SmoothTransformation)
+            img.setDevicePixelRatio(2)
+            off = QtCore.QPointF((body.width() - img.width() / 2) / 2, (body.height() - img.height() / 2) / 2)
+            p.drawPixmap(body.topLeft() + off, img)
             p.restore()
-            x = ir.right() + 10
-            txt = "图片"
         else:
             txt = " ".join((self.item.get("text") or "").split())
-        tw = r.right() - x - 112
-        p.setFont(ui_font(12.5))
-        p.setPen(theme.text())
-        fm = QtGui.QFontMetrics(p.font())
-        p.drawText(QtCore.QRectF(x, r.y(), tw, r.height()), Qt.AlignmentFlag.AlignVCenter,
-                   "已复制" if self.flash else fm.elidedText(txt, Qt.TextElideMode.ElideRight, int(tw)))
+            p.setFont(ui_font(12.5))
+            p.setPen(theme.text())
+            fm = QtGui.QFontMetrics(p.font())
+            lines = max(1, int(body.height() // fm.lineSpacing()))
+            # 手动按宽度断行，最多 lines 行，末行省略
+            out, cur = [], ""
+            for ch in txt:
+                if fm.horizontalAdvance(cur + ch) > body.width():
+                    out.append(cur)
+                    cur = ch
+                    if len(out) >= lines:
+                        break
+                else:
+                    cur += ch
+            if len(out) < lines and cur:
+                out.append(cur)
+            if len(out) == lines and (len("".join(out)) < len(txt)):
+                out[-1] = fm.elidedText(out[-1] + "…", Qt.TextElideMode.ElideRight, int(body.width()))
+            for i, line in enumerate(out[:lines]):
+                p.drawText(QtCore.QRectF(body.x(), body.y() + i * fm.lineSpacing(), body.width(), fm.lineSpacing()),
+                           Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, line)
+        # 底栏：时间 · 置顶 · 删除
         p.setFont(ui_font(10.5, num=True))
         p.setPen(theme.text3())
-        p.drawText(QtCore.QRectF(r.right() - 112, r.y(), 44, r.height()), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
+        p.drawText(QtCore.QRectF(r.x() + 14, r.bottom() - 34, 80, 30), Qt.AlignmentFlag.AlignVCenter,
                    time.strftime("%H:%M", time.localtime(self.item.get("time", 0))))
         pinned = self.item.get("pinned")
         for rect, glyph, hot, base in ((self._pin_rect(), G.PIN if pinned else G.UNPIN, self._hot == "pin", 0.9 if pinned else 0.4),
@@ -111,22 +130,20 @@ class ClipRow(Hoverable):
 
 
 class ClipboardPage(Page):
-    key, glyph, title, height = "clip", G.CLIP, "剪贴板", 330
+    key, glyph, title, height = "clip", G.CLIP, "剪贴板", 360
 
     def __init__(self, ctx):
         super().__init__(ctx)
-        self.search = LineEdit("搜索")
-        self.search.focus_wanted.connect(self.want_focus)
-        self.search.textChanged.connect(lambda _: self.refresh())
-        clear = PillButton("清空", G.TRASH, height=30)
+        clear = PillButton("清空", G.TRASH, height=28)
         clear.clicked.connect(lambda: ctx.clipboard.clear())
         self.sc = ScrollArea()
         self.list = QtWidgets.QGridLayout(self.sc.inner)
-        self.list.setContentsMargins(0, 0, 4, 0)
-        self.list.setSpacing(6)
+        self.list.setContentsMargins(14, 2, 18, 8)      # 与两侧边缘留出更大距离
+        self.list.setHorizontalSpacing(14)
+        self.list.setVerticalSpacing(14)
         self.list.setColumnStretch(0, 1)
         self.list.setColumnStretch(1, 1)
-        self.setLayout(vbox(hbox((self.search, 1), clear), (self.sc, 1), spacing=8))
+        self.setLayout(vbox(hbox(None, clear, margins=(0, 0, 14, 0)), (self.sc, 1), spacing=6))
         ctx.clipboard.changed.connect(self._changed)
         self._dirty = True
         self._just = None
@@ -142,7 +159,7 @@ class ClipboardPage(Page):
             it = self.list.takeAt(0)
             if it.widget():
                 it.widget().deleteLater()
-        q = self.search.text().strip().lower()
+        q = ""
         n = 0
         for item in self.ctx.clipboard.items():
             if q and (item.get("kind") != "text" or q not in (item.get("text") or "").lower()):
@@ -173,33 +190,50 @@ class ClipboardPage(Page):
 
 
 class LiveView(QtWidgets.QWidget):
-    """实时字幕：日语小字 + 中文大字，最新的在最下面；正在说的一句（草稿）实时更新。"""
+    """实时字幕：日语小字（可点词查词）+ 中文大字，最新的在最下面；正在说的一句（草稿）实时更新。"""
     MAX = 80
+    word_clicked = QtCore.Signal(object, dict)      # (Token, 所在字幕行)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.rows: list[dict] = []          # {sid, jp, zh, final}
         self.partial = ""
+        self.partial_zh = ""
         self.hint = ""
+        self.tokens_fn = None               # text -> list[Token]（学习服务提供）
+        self._hits: list[tuple[QtCore.QRectF, object, dict]] = []
+        self._hover = None
+        self.setMouseTracking(True)
         theme.changed.connect(self.update)
 
-    def _row(self, sid):
+    def _find(self, sid):
         for r in reversed(self.rows):
             if r["sid"] == sid:
                 return r
+        return None
+
+    def _row(self, sid):
+        r = self._find(sid)
+        if r is not None:
+            return r
         r = {"sid": sid, "jp": "", "zh": "", "final": False}
         self.rows.append(r)
         del self.rows[:-self.MAX]
         return r
 
     def on_segment(self, sid, jp):
-        self._row(sid)["jp"] = jp
-        self.partial = ""
+        r = self._row(sid)
+        r["jp"] = jp
+        if not r["zh"] and self.partial_zh:
+            r["zh"] = self.partial_zh          # 草稿译文先挂到这一句，等最终译文覆盖
+        self.partial, self.partial_zh = "", ""
         self.update()
 
     def on_live(self, sid, zh):
-        r = self._row(sid)
-        if not r["final"]:
+        r = self._find(sid)
+        if r is None:
+            self.partial_zh = zh               # 句子还没定稿：译文跟着草稿行显示，不单独成行
+        elif not r["final"]:
             r["zh"] = zh
         self.update()
 
@@ -213,19 +247,35 @@ class LiveView(QtWidgets.QWidget):
         self.update()
 
     def clear(self):
-        self.rows, self.partial = [], ""
+        self.rows, self.partial, self.partial_zh = [], "", ""
         self.update()
+
+    # ---------- 日语行：按词排版（可点击） ----------
+    def _flow(self, text: str, w: float, fm: QtGui.QFontMetrics, clickable: bool):
+        """返回 [(x, line_index, width, Token|None, piece)] 与行数。"""
+        toks = self.tokens_fn(text) if (clickable and self.tokens_fn) else []
+        pieces = [(t.surface, t) for t in toks] if toks else [(ch, None) for ch in text]
+        out, x, line = [], 0.0, 0
+        for piece, tok in pieces:
+            pw = fm.horizontalAdvance(piece)
+            if x > 0 and x + pw > w:
+                x, line = 0.0, line + 1
+            out.append((x, line, pw, tok, piece))
+            x += pw
+        return out, line + 1
 
     def paintEvent(self, e):
         p = painter(self)
         w = self.width() - 8
         y = self.height() - 4
-        fj, fz = ui_font(12), ui_font(16, W.Medium)
+        fj, fz = ui_font(12.5), ui_font(16, W.Medium)
         fmj, fmz = QtGui.QFontMetrics(fj), QtGui.QFontMetrics(fz)
+        lh = fmj.height() + 1
         flags = int(Qt.AlignmentFlag.AlignLeft) | int(Qt.TextFlag.TextWordWrap)
         items = list(self.rows)
-        if self.partial:
-            items.append({"jp": self.partial, "zh": "", "final": False, "draft": True})
+        if self.partial or self.partial_zh:
+            items.append({"jp": self.partial, "zh": self.partial_zh, "final": False, "draft": True})
+        self._hits = []
         if not items:
             p.setFont(ui_font(13))
             p.setPen(theme.text3())
@@ -234,7 +284,9 @@ class LiveView(QtWidgets.QWidget):
         for it in reversed(items):
             zh = it.get("zh", "")
             hz = fmz.boundingRect(QtCore.QRect(0, 0, w, 10000), flags, zh).height() if zh else 0
-            hj = fmj.boundingRect(QtCore.QRect(0, 0, w, 10000), flags, it.get("jp", "")).height()
+            draft = bool(it.get("draft"))
+            flow, nlines = self._flow(it.get("jp", ""), w, fmj, not draft)
+            hj = nlines * lh
             y -= hz
             if zh:
                 p.setFont(fz)
@@ -242,11 +294,45 @@ class LiveView(QtWidgets.QWidget):
                 p.drawText(QtCore.QRect(4, y, w, hz), flags, zh)
             y -= hj + 2
             p.setFont(fj)
-            p.setPen(theme.text3() if it.get("draft") else theme.text2())
-            p.drawText(QtCore.QRect(4, y, w, hj), flags, it.get("jp", ""))
+            for x, line, pw, tok, piece in flow:
+                r = QtCore.QRectF(4 + x, y + line * lh, pw, lh)
+                hot = tok is not None and tok.clickable and self._hover is not None \
+                    and self._hover[0] == it.get("sid") and self._hover[1] == (line, round(x))
+                if hot:
+                    p.setPen(Qt.PenStyle.NoPen)
+                    p.setBrush(theme.hover())
+                    p.drawRoundedRect(r.adjusted(-2, 0, 2, 0), 5, 5)
+                p.setPen(theme.text3() if draft else (theme.text() if hot else theme.text2()))
+                p.drawText(r, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, piece)
+                if tok is not None and tok.clickable and not draft and r.bottom() > 0:
+                    self._hits.append((r, tok, it, (line, round(x))))
             y -= 12
             if y < 0:
                 break
+
+    def _hit(self, pos):
+        for r, tok, row, key in self._hits:
+            if r.contains(pos):
+                return r, tok, row, key
+        return None
+
+    def mouseMoveEvent(self, e):
+        h = self._hit(e.position())
+        new = (h[2].get("sid"), h[3]) if h else None
+        if new != self._hover:
+            self._hover = new
+            self.setCursor(Qt.CursorShape.PointingHandCursor if h else Qt.CursorShape.ArrowCursor)
+            self.update()
+
+    def leaveEvent(self, e):
+        if self._hover is not None:
+            self._hover = None
+            self.update()
+
+    def mouseReleaseEvent(self, e):
+        h = self._hit(e.position())
+        if h and e.button() == Qt.MouseButton.LeftButton:
+            self.word_clicked.emit(h[1], h[2])
 
 
 class LevelBar(QtWidgets.QWidget):
@@ -267,6 +353,172 @@ class LevelBar(QtWidgets.QWidget):
         p.drawRoundedRect(r, 4, 4)
         p.setBrush(theme.on_color())
         p.drawRoundedRect(QtCore.QRectF(0, 0, max(8, r.width() * min(1.0, self.v * 1.6)), r.height()), 4, 4)
+
+
+class WordRow(Hoverable):
+    """单词本的一行：单词【读音】 释义；右侧同步状态与删除。"""
+    delete_clicked = QtCore.Signal()
+
+    def __init__(self, card, parent=None):
+        super().__init__(parent)
+        self.card = card
+        self.setFixedHeight(50)
+        self.setMouseTracking(True)
+        self._hot = False
+
+    def _del_rect(self):
+        return QtCore.QRectF(self.width() - 32, (self.height() - 26) / 2, 26, 26)
+
+    def mouseMoveEvent(self, e):
+        hot = self._del_rect().contains(e.position())
+        if hot != self._hot:
+            self._hot = hot
+            self.update()
+
+    def mouseReleaseEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self._del_rect().contains(e.position()):
+            self.delete_clicked.emit()
+            return
+        super().mouseReleaseEvent(e)
+
+    def paintEvent(self, e):
+        p = painter(self)
+        r = QtCore.QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(theme.card(0.7 + 0.8 * self._hover.x))
+        p.drawRoundedRect(r, 14, 14)
+        c = self.card
+        x = r.x() + 14
+        p.setFont(ui_font(15, W.DemiBold))
+        p.setPen(theme.text())
+        fm = QtGui.QFontMetrics(p.font())
+        p.drawText(QtCore.QRectF(x, r.y(), 200, r.height()), Qt.AlignmentFlag.AlignVCenter, c.word)
+        x += fm.horizontalAdvance(c.word) + 6
+        if c.reading and c.reading != c.word:
+            p.setFont(ui_font(12))
+            p.setPen(theme.on_color())
+            rd = f"【{c.reading}】"
+            p.drawText(QtCore.QRectF(x, r.y(), 200, r.height()), Qt.AlignmentFlag.AlignVCenter, rd)
+            x += QtGui.QFontMetrics(p.font()).horizontalAdvance(rd) + 8
+        status = {2: "Anki ✓", 1: "已导出"}.get(c.exported, "待同步")
+        p.setFont(ui_font(11))
+        sw = QtGui.QFontMetrics(p.font()).horizontalAdvance(status) + 4
+        tw = r.right() - 44 - sw - x
+        meaning = (c.meaning or "").splitlines()[0] if c.meaning else ""
+        p.setFont(ui_font(12.5))
+        p.setPen(theme.text2())
+        p.drawText(QtCore.QRectF(x, r.y(), max(0, tw), r.height()), Qt.AlignmentFlag.AlignVCenter,
+                   QtGui.QFontMetrics(p.font()).elidedText(meaning, Qt.TextElideMode.ElideRight, int(max(0, tw))))
+        p.setFont(ui_font(11))
+        p.setPen(theme.on_color() if c.exported >= 2 else theme.text3())
+        p.drawText(QtCore.QRectF(r.right() - 40 - sw, r.y(), sw, r.height()),
+                   Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, status)
+        if self._hover.x > 0.05:
+            dr = self._del_rect()
+            if self._hot:
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(theme.hover())
+                p.drawEllipse(dr)
+            p.setFont(icon_font(11))
+            p.setPen(theme.text(0.9 if self._hot else 0.45))
+            p.drawText(dr, Qt.AlignmentFlag.AlignCenter, G.CLOSE)
+
+
+class WordbookView(QtWidgets.QWidget):
+    """单词本：搜索 / 查新词、同步到 Anki、导出 .apkg、自动同步开关。"""
+    def __init__(self, ctx, lookup_cb, parent=None):
+        super().__init__(parent)
+        self.ctx = ctx
+        self.lookup_cb = lookup_cb
+        self.search = LineEdit("搜索单词本 · 回车查词")
+        self.search.textChanged.connect(lambda _: self.refresh())
+        self.search.returnPressed.connect(lambda: self.lookup_cb(self.search.text().strip(), {}))
+        self.sync_btn = PillButton("同步到 Anki", G.REFRESH, height=30, primary=True)
+        self.sync_btn.clicked.connect(self._sync)
+        self.export_btn = PillButton("导出 .apkg", G.OPEN, height=30)
+        self.export_btn.clicked.connect(self._export)
+        self.auto_btn = PillButton("", G.CHECK, height=30)
+        self.auto_btn.clicked.connect(self._toggle_auto)
+        self.count = Label("", 11.5, level=3)
+        self.sc = ScrollArea()
+        self.list = QtWidgets.QVBoxLayout(self.sc.inner)
+        self.list.setContentsMargins(0, 0, 4, 0)
+        self.list.setSpacing(6)
+        self.setLayout(vbox(hbox((self.search, 1), spacing=6),
+                            hbox(self.sync_btn, self.export_btn, self.auto_btn, None, self.count, spacing=6),
+                            (self.sc, 1), spacing=8))
+        ctx.learn.changed.connect(self._changed)
+        self._dirty = True
+        self._auto_label()
+
+    def want_focus(self, cb):
+        self.search.focus_wanted.connect(cb)
+
+    def _auto_label(self):
+        on = bool(cfg.get("learn.auto_sync", False))
+        self.auto_btn.set_text("自动同步：开" if on else "自动同步：关")
+        self.auto_btn.glyph = G.CHECK if on else G.CLOSE
+
+    def _toggle_auto(self):
+        cfg.set("learn.auto_sync", not bool(cfg.get("learn.auto_sync", False)))
+        self._auto_label()
+        self.ctx.learn.auto_sync()
+
+    def _changed(self):
+        self._dirty = True
+        if self.isVisible():
+            self.refresh()
+
+    def showEvent(self, e):
+        if self._dirty:
+            self.refresh()
+
+    def refresh(self):
+        self._dirty = False
+        while self.list.count():
+            it = self.list.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+        cards = self.ctx.learn.cards(self.search.text().strip())
+        for c in cards[:200]:
+            row = WordRow(c)
+            row.clicked.connect(lambda c=c: self.lookup_cb(c.word, {"sentence": c.sentence, "sentence_zh": c.sentence_zh}))
+            row.delete_clicked.connect(lambda cid=c.id: self.ctx.learn.delete([cid]))
+            self.list.addWidget(row)
+        if not cards:
+            self.list.addWidget(Label("空", 12.5, level=3,
+                                      align=Qt.AlignmentFlag.AlignCenter))
+        self.list.addStretch(1)
+        n_new = sum(1 for c in self.ctx.learn.cards() if c.exported < 2)
+        self.count.setText(f"{len(cards)} 个词 · 待同步 {n_new}")
+
+    def _sync(self):
+        ids = self.ctx.learn.unsynced_ids()
+        if not ids:
+            self.count.setText("没有待同步的词")
+            return
+        self.count.setText(f"同步中（{len(ids)}）…")
+        self.ctx.learn.push_cards(ids)
+
+    def _export(self):
+        import time as _t
+        from pathlib import Path
+        default = Path.home() / "Desktop" / f"wisland单词本_{_t.strftime('%Y%m%d_%H%M')}.apkg"
+        isl = self.ctx.island
+        if isl:
+            isl.locks.add("dialog")
+        try:
+            path, _ = QtWidgets.QFileDialog.getSaveFileName(None, "导出 Anki 卡组", str(default), "Anki 卡组 (*.apkg)")
+        finally:
+            if isl:
+                isl.locks.discard("dialog")
+        if not path:
+            return
+        try:
+            n = self.ctx.learn.export_apkg(path)
+            self.count.setText(f"已导出 {n} 张")
+        except Exception as e:  # noqa: BLE001
+            self.count.setText(f"导出失败：{e}")
 
 
 class TranslatePage(Page):
@@ -316,11 +568,20 @@ class TranslatePage(Page):
         live_w = QtWidgets.QWidget()
         live_w.setLayout(vbox(hbox(self.live_btn, self.level, self.live_status, None, clear, spacing=8), (live_card, 1), spacing=8))
 
-        self.mode = Segmented(["文本", "实时字幕"])
-        self.mode.setFixedWidth(170)
+        # 查词与单词本（Anki）
+        from ..lookup import LookupPopup
+        self.popup = LookupPopup(ctx.learn)
+        self.view.tokens_fn = ctx.learn.tokens
+        self.view.word_clicked.connect(self._word_clicked)
+        self.book = WordbookView(ctx, self.lookup)
+        self.book.want_focus(self.want_focus)
+
+        self.mode = Segmented(["文本", "实时字幕", "单词本"])
+        self.mode.setFixedWidth(240)
         self.modes = QtWidgets.QStackedWidget()
         self.modes.addWidget(text_w)
         self.modes.addWidget(live_w)
+        self.modes.addWidget(self.book)
         self.mode.changed.connect(self.modes.setCurrentIndex)
         self.setLayout(vbox(hbox(self.mode, None), (self.modes, 1), spacing=8))
 
@@ -344,6 +605,18 @@ class TranslatePage(Page):
             last = h[0] if isinstance(h[0], dict) else {}
             self.input.setPlainText(last.get("src", ""))
             self.out.setText(last.get("dst", ""))
+
+    def lookup(self, word: str, ctx: dict):
+        if not word:
+            return
+        self.popup.island = self.island
+        self.popup.show_for(word, sentence=ctx.get("sentence", ""), sentence_zh=ctx.get("sentence_zh", ""))
+
+    def _word_clicked(self, tok, row):
+        self.popup.island = self.island
+        self.popup.show_for(tok.lemma or tok.surface, surface=tok.surface, reading=tok.reading, pos=tok.pos,
+                            sentence=row.get("jp", ""), sentence_zh=row.get("zh", ""),
+                            audio=self.ctx.live.clip(row.get("sid", "")))
 
     def show_live(self):
         self.mode.set_index(1)
