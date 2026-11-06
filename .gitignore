@@ -1,0 +1,16 @@
+# 本地环境
+.venv/
+__pycache__/
+*.pyc
+
+# 个人配置与数据（含 API Key、剪贴板 / 翻译历史、日志）
+config.json
+config.backup.json
+data/
+
+# 调试脚本与截图（含屏幕内容）
+scratch/
+
+# 译声原项目、模型、字典（体积大，本地使用）
+translator/
+models/

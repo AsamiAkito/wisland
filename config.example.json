@@ -1,0 +1,159 @@
+{
+  "island": {
+    "edge": "top",
+    "pos": 0.5,
+    "screen": 0,
+    "theme": "auto",
+    "hide_fullscreen": false,
+    "hover_expand_ms": 120,
+    "collapse_delay_ms": 320,
+    "exclude_from_capture": true,
+    "blur_fps": 8,
+    "scale": 1.0,
+    "default_tab": "home",
+    "pinned": false,
+    "compact_view": "clock",
+    "passthrough": false
+  },
+  "hotkeys": {
+    "toggle": "Ctrl+Alt+I",
+    "translate": "Ctrl+Alt+J",
+    "clipboard": "Ctrl+Alt+V"
+  },
+  "media": {
+    "priority": [
+      "cloudmusic",
+      "bilibili",
+      "chrome",
+      "zen",
+      "msedge",
+      "firefox"
+    ]
+  },
+  "notify": {
+    "toast_apps": {
+      "QQ": {
+        "name": "QQ",
+        "kind": "qq"
+      },
+      "ThunderbirdToast": {
+        "name": "邮件",
+        "kind": "mail"
+      },
+      "Weixin": {
+        "name": "微信",
+        "kind": "wechat"
+      }
+    },
+    "flash_processes": {
+      "weixin.exe": {
+        "name": "微信",
+        "kind": "wechat"
+      },
+      "wechat.exe": {
+        "name": "微信",
+        "kind": "wechat"
+      },
+      "qq.exe": {
+        "name": "QQ",
+        "kind": "qq"
+      },
+      "thunderbird.exe": {
+        "name": "邮件",
+        "kind": "mail"
+      }
+    },
+    "open": {
+      "qq": "",
+      "wechat": "",
+      "mail": ""
+    }
+  },
+  "stocks": {
+    "server": "http://127.0.0.1:8321",
+    "markets": [
+      "a",
+      "hk",
+      "us"
+    ],
+    "interval": 5,
+    "pct_alert": 3.0,
+    "alerts": {},
+    "ticker": [],
+    "autostart": ""
+  },
+  "weather": {
+    "api_key": "",
+    "city": "Shanghai",
+    "lat": null,
+    "lon": null,
+    "units": "metric",
+    "lang": "zh_cn",
+    "interval_min": 15,
+    "cities": []
+  },
+  "brightness": {
+    "twinkle": ""
+  },
+  "clash": {
+    "config_dir": "%APPDATA%/io.github.clash-verge-rev.clash-verge-rev",
+    "proxy_port": 7897,
+    "app": ""
+  },
+  "translate": {
+    "api_key": "",
+    "base_url": "https://api.deepseek.com",
+    "model": "deepseek-flash",
+    "import_from": ""
+  },
+  "apps": {
+    "restore_hotkey": {
+      "weixin.exe": "Ctrl+Alt+W",
+      "wechat.exe": "Ctrl+Alt+W"
+    }
+  },
+  "mail": {
+    "interval_s": 120,
+    "imap": []
+  },
+  "live": {
+    "models_dir": "models",
+    "audio": {
+      "source": "loopback",
+      "device": "",
+      "block_ms": 80
+    },
+    "vad": {
+      "threshold": 0.4,
+      "min_silence_ms": 350,
+      "min_speech_ms": 200,
+      "max_segment_s": 10
+    },
+    "asr": {
+      "partial": true,
+      "draft_mode": "rolling",
+      "draft_interval_ms": 500,
+      "draft_threads": 4,
+      "final_engine": "parakeet",
+      "final_threads": 6,
+      "max_segment_s": 10,
+      "context_prompt": false
+    },
+    "translate": {
+      "enabled": true,
+      "live": true,
+      "live_min_interval_ms": 900,
+      "live_min_new_chars": 4,
+      "context_lines": 3
+    }
+  },
+  "clipboard": {
+    "max": 10
+  },
+  "launcher": [
+    {
+      "name": "文件资源管理器",
+      "path": "C:/Windows/explorer.exe"
+    }
+  ]
+}

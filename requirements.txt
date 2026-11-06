@@ -1,0 +1,18 @@
+PySide6-Essentials>=6.12
+psutil
+httpx
+pycaw
+comtypes
+pyyaml
+winrt-runtime
+winrt-Windows.Media.Control
+winrt-Windows.Foundation
+winrt-Windows.Foundation.Collections
+winrt-Windows.Storage.Streams
+winrt-Windows.Devices.Radios
+# 实时字幕（日语识别）
+numpy>=1.26,<3
+SoundCard>=0.4,<1
+soxr>=0.3,<1
+sherpa-onnx>=1.12,<2
+huggingface-hub>=0.24,<2
