@@ -1001,13 +1001,19 @@ class Island(QtWidgets.QWidget):
         now = time.monotonic()
         if not self.expanded and self.mode == "anchored" and not self._fs_hidden:
             # 收起时（任何展开方式）：鼠标靠近就把水滴"挤"一下，离开后带回弹地恢复
+            # 只有鼠标进入灵动岛范围才挤压；越靠近中心挤压越强（边缘处几乎不变形）。
+            # 靠近但没碰到时只有表情变化（由小形象自己处理），不挤压。
             gp = QtCore.QPointF(QtGui.QCursor.pos())
             lp = gp - QtCore.QPointF(self._win_origin)
-            near = self.body.adjusted(-28, -28, 28, 28).contains(lp)
-            if near:
+            b = self.body
+            if b.contains(lp):
+                nx = (lp.x() - b.center().x()) / max(1.0, b.width() / 2)
+                ny = (lp.y() - b.center().y()) / max(1.0, b.height() / 2)
+                depth = 1.0 - min(1.0, math.hypot(nx, ny))           # 0 = 边缘，1 = 中心
+                target = depth ** 1.4
                 self._poke_pt = gp
-                if self.poke.target != 1.0:
-                    self.poke.to(1.0, 380, 0.55)
+                if abs(self.poke.target - target) > 0.01:
+                    self.poke.to(target, 260, 0.75)
                     self._kick()
             elif self.poke.target != 0.0:
                 self.poke.to(0.0, 300, 0.22)          # 欠阻尼：弹回时会外鼓几下
