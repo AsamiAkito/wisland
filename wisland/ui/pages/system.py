@@ -76,7 +76,7 @@ class ControlsPage(Page):
         super().__init__(ctx)
         self.vol = Slider(G.VOLUME)
         self.bri = Slider(G.SUN)
-        self.vol.moved.connect(lambda v: ctx.audio.set_volume(v))
+        self.vol.moved.connect(self._set_vol)
         self.vol.icon_clicked.connect(lambda: ctx.audio.toggle_mute())
         self.bri.moved.connect(lambda v: ctx.brightness.set(None, round(v * 100)))
         self.wifi = Tile(G.WIFI, "WLAN")
@@ -113,6 +113,12 @@ class ControlsPage(Page):
         gw.setLayout(grid)
         gw.setFixedWidth(270)
         self.setLayout(hbox((left, 1), vbox(gw, None), spacing=10))
+
+    def _set_vol(self, v: float):
+        a = self.ctx.audio
+        a.set_volume(v)
+        if v > 0.001 and a.muted():
+            a.set_muted(False)          # 调大音量时顺便取消静音（否则看起来"没反应"）
 
     # --- 数据 ---
     def set_volume(self, v: float, muted: bool):

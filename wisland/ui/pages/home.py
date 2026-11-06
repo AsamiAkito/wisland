@@ -156,12 +156,11 @@ class CoverTitle(QtWidgets.QWidget):
         text = fm.elidedText(text, Qt.TextElideMode.ElideRight, int(maxw - 20))
         tw = fm.horizontalAdvance(text) + 20
         tr = QtCore.QRectF((W_ - tw) / 2, cr.bottom() - 12, tw, fm.height() + 8)
-        bg = QtGui.QColor(theme.tint())
-        bg.setAlpha(min(255, bg.alpha() + 90))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(bg)
-        p.drawRoundedRect(tr, tr.height() / 2, tr.height() / 2)
         p.setFont(f)
+        sh = QtGui.QColor(0, 0, 0, 120) if theme.dark else QtGui.QColor(255, 255, 255, 170)
+        p.setPen(sh)
+        for dx, dy in ((0, 1), (1, 0), (-1, 0), (0, -1)):
+            p.drawText(tr.translated(dx, dy), Qt.AlignmentFlag.AlignCenter, text)
         p.setPen(theme.text())
         p.drawText(tr, Qt.AlignmentFlag.AlignCenter, text)
 
@@ -218,10 +217,8 @@ class MediaCard(Card):
             self._ht.stop()
 
     def paintEvent(self, e):
-        p = painter(self)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(theme.card(1.0 + 0.7 * max(0.0, self._hov.x)))
-        p.drawRoundedRect(QtCore.QRectF(self.rect()), self.radius, self.radius)
+        """不画独立背景，直接嵌在灵动岛玻璃上（悬停时封面 / 进度条有动画）。"""
+        return
 
     def _open_player(self):
         items = cfg.get("launcher") or []
@@ -292,18 +289,22 @@ class Action(Hoverable):
     def paintEvent(self, e):
         p = painter(self)
         r = QtCore.QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        s = self.press_scale()
+        sc = self.press_scale()
         p.translate(r.center())
-        p.scale(s, s)
+        p.scale(sc, sc)
         p.translate(-r.center())
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(theme.on_color() if self.on else theme.card(1.0 + 0.6 * self._hover.x))
-        p.drawRoundedRect(r, 16, 16)
-        p.setFont(icon_font(17))
-        p.setPen(theme.on_fg() if self.on else theme.text(0.9))
+        if self._hover.x > 0.01:
+            c = theme.hover()
+            c.setAlphaF(c.alphaF() * self._hover.x)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(c)
+            p.drawRoundedRect(r, 16, 16)
+        col = theme.on_color() if self.on else theme.text(0.9)
+        p.setFont(icon_font(18))
+        p.setPen(col)
         p.drawText(QtCore.QRectF(r.x(), r.y() + 6, r.width(), 26), Qt.AlignmentFlag.AlignCenter, self.glyph)
-        p.setFont(ui_font(11.5, W.Medium))
-        p.setPen(theme.on_fg(0.9) if self.on else theme.text2())
+        p.setFont(ui_font(11.5, W.DemiBold if self.on else W.Medium))
+        p.setPen(theme.on_color() if self.on else theme.text2())
         p.drawText(QtCore.QRectF(r.x(), r.y() + 32, r.width(), 18), Qt.AlignmentFlag.AlignCenter, self.title)
 
 
@@ -401,7 +402,7 @@ class PetWidget(QtWidgets.QWidget):
         from ..compact import PetFace
         self.face = PetFace()
         self.scale = scale
-        self.setFixedWidth(round(64 * scale))
+        self.setMinimumWidth(round(64 * scale))
         self._t = QtCore.QTimer(self, interval=33, timeout=self.update)
         theme.changed.connect(self.update)
 
@@ -481,12 +482,14 @@ class HomePage(Page):
         grid.addWidget(self.a_live, 1, 1)
         gw = QtWidgets.QWidget()
         gw.setLayout(grid)
-        gw.setFixedWidth(196)
+        gw.setFixedWidth(150)
         self.strip = LaunchStrip()
         self.launch_row = self.strip.row
         self.build_launcher()
         self.pet = PetWidget()
-        lay = vbox(hbox((self.media, 1), self.pet, gw, spacing=10), self.strip, spacing=8)
+        # 播放卡贴左、四个按钮贴右，各自收窄；中间整块留给小形象
+        self.media.setFixedWidth(200)
+        lay = vbox(hbox(self.media, (self.pet, 1), gw, spacing=12), self.strip, spacing=8)
         self.setLayout(lay)
 
     def build_launcher(self):

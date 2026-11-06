@@ -19,7 +19,7 @@ from .widgets import IconButton, painter
 Qt = QtCore.Qt
 
 ICON_W = 34.0
-GAP = 2.0
+GAP = 10.0
 LONG_PRESS_MS = 380
 
 
@@ -112,11 +112,15 @@ class NavBar(QtWidgets.QWidget):
             self._t.stop()
 
     def _rects(self) -> list[QtCore.QRectF]:
-        out = []
-        x = 2.0
+        """标签组水平居中（不压到右侧按钮）。"""
+        widths = [max(ICON_W * 0.7, s.x) for s in self.w]
+        total = sum(widths) + GAP * (len(widths) - 1)
+        right = sum(b.width() + 2 for b in self.right_buttons)
+        x = max(2.0, (self.width() - total) / 2)
+        x = min(x, max(2.0, self.width() - right - 4 - total))
         h = self.height()
-        for s in self.w:
-            w = max(ICON_W * 0.7, s.x)
+        out = []
+        for w in widths:
             out.append(QtCore.QRectF(x, 2, w, h - 4))
             x += w + GAP
         return out

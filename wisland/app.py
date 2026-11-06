@@ -217,6 +217,8 @@ def main():
         kind = n.get("kind", "other")
         glyph = {"mail": G.MAIL, "qq": G.CHAT, "wechat": G.MESSAGE}.get(kind, G.BELL)
         sub = "新邮件" if kind == "mail" else (n.get("sender") or "新消息")
+        compact.pet.react("surprise")
+        P["home"].pet.face.react("surprise")
         island.activity({"glyph": glyph, "color": KIND_COLORS.get(kind, KIND_COLORS["other"]),
                          "title": n.get("name", kind), "sub": sub}, 4.0)
         if P["msg"].active:

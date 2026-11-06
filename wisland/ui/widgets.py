@@ -316,8 +316,13 @@ class Slider(QtWidgets.QWidget, Themed):
             self.released.emit(self.value)
 
     def wheelEvent(self, e):
-        d = 0.04 if e.angleDelta().y() > 0 else -0.04
-        self.value = clamp(self.value + d, 0, 1)
+        # 按实际滚动量换算（每格 5%），高精度滚轮 / 触摸板的细小步进也能平滑调节
+        steps = (e.angleDelta().y() or e.angleDelta().x()) / 120.0
+        if not steps:
+            e.ignore()
+            return
+        e.accept()
+        self.value = clamp(self.value + 0.05 * steps, 0, 1)
         self.shown.to(self.value)
         self._kick()
         self.moved.emit(self.value)
