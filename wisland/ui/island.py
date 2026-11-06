@@ -1121,8 +1121,10 @@ class Island(QtWidgets.QWidget):
         if mode == "always":
             self.expand()
         elif mode == "never":
+            # 不立即收起：鼠标离开灵动岛后才收起（之后悬停 / 单击都不再展开）
             self.locks.discard("pin")
-            self.collapse()
+            if not self._inside(QtGui.QCursor.pos()):
+                self.collapse()
         self.mode_changed.emit(mode)
         self.pin_changed.emit(mode == "always")
 
