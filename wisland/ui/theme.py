@@ -56,6 +56,8 @@ class G:
     DOWN = "\uE74B"
     ADD = "\uE710"
     POINTER = "\uE8B0"
+    EYE = "\uE890"
+    EYE_OFF = "\uED1A"
     SEARCH = "\uE721"
     LIVE = "\uE720"   # 麦克风
 

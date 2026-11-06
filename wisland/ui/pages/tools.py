@@ -143,6 +143,7 @@ class ClipboardPage(Page):
     def __init__(self, ctx):
         super().__init__(ctx)
         clear = PillButton("清空", G.TRASH, height=28)
+        self.clear_btn = clear
         clear.clicked.connect(lambda: ctx.clipboard.clear())
         self.sc = ScrollArea()
         self.list = QtWidgets.QGridLayout(self.sc.inner)
@@ -154,6 +155,7 @@ class ClipboardPage(Page):
         self.setLayout(vbox(hbox(None, clear, margins=(0, 0, 14, 0)), (self.sc, 1), spacing=6))
         ctx.clipboard.changed.connect(self._changed)
         self._dirty = True
+        self.height = 400 if ctx.clipboard.items() else 150      # 打开时直接用对的高度
         self._just = None
 
     def _changed(self):
@@ -181,9 +183,10 @@ class ClipboardPage(Page):
             if self._just and self._just[0] == iid and time.monotonic() - self._just[1] < 0.9:
                 row.mark_copied()
             n += 1
-        if n == 0:
-            self.list.addWidget(Label("空" if not q else "无匹配", 12.5, level=3, align=Qt.AlignmentFlag.AlignCenter), 0, 0, 1, 2)
         self.list.setRowStretch(max(1, (n + 1) // 2), 1)
+        self.sc.setVisible(n > 0)
+        self.clear_btn.setVisible(n > 0)
+        self.set_height(400 if n > 0 else 150)        # 没有内容时回到默认高度
 
     def _copy(self, iid, row):
         """点击 = 复制到剪贴板（不粘贴）。"""
@@ -608,11 +611,12 @@ class TranslatePage(Page):
         ctx.translate.finished.connect(self._done)
         ctx.translate.failed.connect(self._fail)
         self._buf = ""
-        h = list(getattr(ctx.translate, "history", []) or [])
-        if h:
-            last = h[0] if isinstance(h[0], dict) else {}
-            self.input.setPlainText(last.get("src", ""))
-            self.out.setText(last.get("dst", ""))
+        # 输入框右上角的清空按钮（有内容时才出现）
+        self.clear_btn = IconButton(G.CLOSE, 24, 10, "清空", self.input)
+        self.clear_btn.clicked.connect(self._clear_all)
+        self.clear_btn.hide()
+        self.input.textChanged.connect(self._sync_clear)
+        self.input.installEventFilter(self)
 
     def lookup(self, word: str, ctx: dict):
         if not word:
@@ -625,6 +629,26 @@ class TranslatePage(Page):
         self.popup.show_for(tok.lemma or tok.surface, surface=tok.surface, reading=tok.reading, pos=tok.pos,
                             sentence=row.get("jp", ""), sentence_zh=row.get("zh", ""),
                             audio=self.ctx.live.clip(row.get("sid", "")))
+
+    def _sync_clear(self):
+        self.clear_btn.setVisible(bool(self.input.toPlainText().strip()))
+        self._place_clear()
+
+    def _place_clear(self):
+        self.clear_btn.move(self.input.width() - self.clear_btn.width() - 8, 6)
+        self.clear_btn.raise_()
+
+    def eventFilter(self, obj, ev):
+        if obj is self.input and ev.type() == QtCore.QEvent.Type.Resize:
+            self._place_clear()
+        return False
+
+    def _clear_all(self):
+        self.ctx.translate.cancel() if hasattr(self.ctx.translate, "cancel") else None
+        self.req = -1
+        self.input.clear()
+        self.out.setText("")
+        self.state.setText("")
 
     def show_live(self):
         self.mode.set_index(1)

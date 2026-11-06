@@ -300,8 +300,10 @@ def main():
         for mode, label in THEME_NAMES:
             a = tm.addAction(("✓  " if cfg.get("island.theme") == mode else "    ") + label)
             a.triggered.connect(lambda _=False, m=mode: (cfg.set("island.theme", m), theme.set_mode(m)))
-        a = menu.addAction(("✓  " if island.pinned() else "    ") + "保持展开")
-        a.triggered.connect(lambda: island.set_pinned(not island.pinned()))
+        em = menu.addMenu("展开方式")
+        for mode, label in (("hover", "悬停展开"), ("always", "常驻展开"), ("never", "保持收起")):
+            a = em.addAction(("✓  " if island.expand_mode() == mode else "    ") + label)
+            a.triggered.connect(lambda _=False, m=mode: island.set_expand_mode(m))
         a = menu.addAction(("✓  " if island.passthrough() else "    ") + "可穿透")
         a.triggered.connect(lambda: island.set_passthrough(not island.passthrough()))
         a = menu.addAction(("✓  " if island.capture_visible() else "    ") + "参与截图")
@@ -330,20 +332,23 @@ def main():
 
     # 主页的「保持展开」「可穿透」按钮
     home = P["home"]
-    home.a_pin.clicked.connect(lambda: island.set_pinned(not island.pinned()))
+    MODE_UI = {"hover": (G.EYE, "悬停展开"), "always": (G.PIN, "常驻展开"), "never": (G.EYE_OFF, "保持收起")}
+    NEXT = {"hover": "always", "always": "never", "never": "hover"}
+    home.a_pin.clicked.connect(lambda: island.set_expand_mode(NEXT[island.expand_mode()]))
     home.a_pt.clicked.connect(lambda: island.set_passthrough(not island.passthrough()))
 
-    def on_pin(on):
-        home.a_pin.set_on(on, G.PIN if on else G.UNPIN, "保持展开")
+    def on_mode(mode):
+        g, label = MODE_UI.get(mode, MODE_UI["hover"])
+        home.a_pin.set_on(mode != "hover", g, label)
 
     def on_pt(on):
         home.a_pt.set_on(on, None, "可穿透")
         if on:
             compact.set_view("pet")            # 穿透时直接显示小形象
             island._kick()
-    island.pin_changed.connect(on_pin)
+    island.mode_changed.connect(on_mode)
     island.passthrough_changed.connect(on_pt)
-    on_pin(island.pinned())
+    on_mode(island.expand_mode())
     home.a_pt.set_on(island.passthrough(), None, "可穿透")
     if island.passthrough():
         compact.set_view("pet")

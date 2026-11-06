@@ -112,7 +112,7 @@ class ControlsPage(Page):
         gw = QtWidgets.QWidget()
         gw.setLayout(grid)
         gw.setFixedWidth(270)
-        self.setLayout(hbox((left, 1), vbox(gw, None), spacing=10))
+        self.setLayout(hbox((left, 1), vbox(None, gw, None), spacing=10))
 
     def _set_vol(self, v: float):
         a = self.ctx.audio

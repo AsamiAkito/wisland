@@ -174,6 +174,7 @@ class Island(QtWidgets.QWidget):
     lock_changed = QtCore.Signal(bool)
     passthrough_changed = QtCore.Signal(bool)
     pin_changed = QtCore.Signal(bool)
+    mode_changed = QtCore.Signal(str)
 
     def __init__(self, pages: list, peak_fn=None):
         super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
@@ -1017,7 +1018,7 @@ class Island(QtWidgets.QWidget):
                 return
         if inside:
             self._out_since = None
-            if not self.expanded:
+            if not self.expanded and self.expand_mode() != "never":
                 if self._hover_since is None:
                     self._hover_since = now
                 elif (now - self._hover_since) * 1000 >= cfg.get("island.hover_expand_ms", 220) \
@@ -1054,7 +1055,8 @@ class Island(QtWidgets.QWidget):
 
     def mouseReleaseEvent(self, e):
         self.lp_timer.stop()
-        if self._press is not None and self.mode == "anchored" and not self.expanded:
+        if self._press is not None and self.mode == "anchored" and not self.expanded \
+                and self.expand_mode() != "never":
             self._press = None
             self.expand()
             self.locks.add("pin")
@@ -1104,10 +1106,34 @@ class Island(QtWidgets.QWidget):
         self.backdrop.hwnd = hwnd
         self.backdrop.self_exclude = visible
 
+    def expand_mode(self) -> str:
+        m = cfg.get("island.expand_mode")
+        if m not in ("hover", "always", "never"):
+            m = "always" if cfg.get("island.pinned", False) else "hover"
+        return m
+
+    def set_expand_mode(self, mode: str):
+        """hover = 鼠标悬停展开、离开收起；always = 一直展开；never = 一直收起（悬停 / 单击都不展开）。"""
+        if mode not in ("hover", "always", "never"):
+            return
+        cfg.set("island.expand_mode", mode, save=False)
+        cfg.set("island.pinned", mode == "always")
+        if mode == "always":
+            self.expand()
+        elif mode == "never":
+            self.locks.discard("pin")
+            self.collapse()
+        self.mode_changed.emit(mode)
+        self.pin_changed.emit(mode == "always")
+
     def pinned(self) -> bool:
-        return bool(cfg.get("island.pinned", False))
+        return self.expand_mode() == "always"
 
     def set_pinned(self, on: bool):
+        self.set_expand_mode("always" if on else "hover")
+        return
+
+    def _set_pinned_old(self, on: bool):
         """图钉：保持展开（不会因鼠标移开而收起），仍可拖动。"""
         cfg.set("island.pinned", bool(on))
         if on and not self.expanded:
