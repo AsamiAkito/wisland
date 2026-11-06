@@ -19,7 +19,7 @@ from .widgets import IconButton, painter
 Qt = QtCore.Qt
 
 ICON_W = 34.0
-GAP = 10.0
+GAP = 16.0
 LONG_PRESS_MS = 380
 
 
@@ -35,7 +35,7 @@ class NavBar(QtWidgets.QWidget):
         self.setMouseTracking(True)
         self.font_ = ui_font(12.5, W.DemiBold)
         fm = QtGui.QFontMetrics(self.font_)
-        self.full_w = [ICON_W + fm.horizontalAdvance(lbl) + 14 for _, _, lbl in items]
+        self.full_w = [ICON_W + fm.horizontalAdvance(lbl) + 30 for _, _, lbl in items]   # 文字右侧多留白
         self.w = [Spring(ICON_W, 260, 0.56, 0.05) for _ in items]
         self.hover = [Spring(0, 400, 1.0, 0.01) for _ in items]
         self.badges: dict[str, int] = {}

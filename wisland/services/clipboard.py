@@ -22,7 +22,7 @@ from wisland.core.config import DATA_DIR, cfg
 CLIPS_DIR = DATA_DIR / "clips"
 STORE_PATH = DATA_DIR / "clipboard.json"
 TEXT_MAX = 20_000
-THUMB_W, THUMB_H = 240, 160
+THUMB_W, THUMB_H = 560, 460      # 卡片接近正方形，2 倍屏下也清晰
 DEBOUNCE_MS = 120
 IGNORE_WINDOW_S = 0.8
 

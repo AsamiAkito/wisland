@@ -26,7 +26,13 @@ class ClipRow(Hoverable):
         self.flash = 0.0
         th = item.get("thumb")
         self.pm = QtGui.QPixmap.fromImage(th) if isinstance(th, QtGui.QImage) and not th.isNull() else None
-        self.setFixedHeight(118)
+        self.setMinimumHeight(150)
+
+    def resizeEvent(self, e):
+        # 接近正方形：高度跟随宽度
+        h = max(150, round(self.width() * 0.82))
+        if self.height() != h:
+            self.setFixedHeight(h)
         self.setMouseTracking(True)
         self._hot = None
 
@@ -83,7 +89,9 @@ class ClipRow(Hoverable):
             path.addRoundedRect(body, 10, 10)
             p.save()
             p.setClipPath(path)
-            img = self.pm.scaled(body.size().toSize() * 2, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            p.setBrush(theme.track())
+            p.drawRoundedRect(body, 10, 10)
+            img = self.pm.scaled(body.size().toSize() * 2, Qt.AspectRatioMode.KeepAspectRatio,
                                  Qt.TransformationMode.SmoothTransformation)
             img.setDevicePixelRatio(2)
             off = QtCore.QPointF((body.width() - img.width() / 2) / 2, (body.height() - img.height() / 2) / 2)
@@ -130,7 +138,7 @@ class ClipRow(Hoverable):
 
 
 class ClipboardPage(Page):
-    key, glyph, title, height = "clip", G.CLIP, "剪贴板", 360
+    key, glyph, title, height = "clip", G.CLIP, "剪贴板", 400
 
     def __init__(self, ctx):
         super().__init__(ctx)
@@ -138,9 +146,9 @@ class ClipboardPage(Page):
         clear.clicked.connect(lambda: ctx.clipboard.clear())
         self.sc = ScrollArea()
         self.list = QtWidgets.QGridLayout(self.sc.inner)
-        self.list.setContentsMargins(14, 2, 18, 8)      # 与两侧边缘留出更大距离
-        self.list.setHorizontalSpacing(14)
-        self.list.setVerticalSpacing(14)
+        self.list.setContentsMargins(36, 2, 40, 10)     # 与两侧边缘留出更大距离
+        self.list.setHorizontalSpacing(22)
+        self.list.setVerticalSpacing(20)
         self.list.setColumnStretch(0, 1)
         self.list.setColumnStretch(1, 1)
         self.setLayout(vbox(hbox(None, clear, margins=(0, 0, 14, 0)), (self.sc, 1), spacing=6))

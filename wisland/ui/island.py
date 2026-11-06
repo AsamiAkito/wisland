@@ -628,6 +628,13 @@ class Island(QtWidgets.QWidget):
         vx = vy = 0.0
         squash = 0.0
         if self.mode == "anchored":
+            pk = clamp(self.poke.x, -0.5, 1.2)
+            if abs(pk) > 0.002 and not self.expanded:
+                # 可穿透时被鼠标"按住"：整颗水滴朝屏幕边压扁、略微变宽，松开后带回弹
+                if self.edge in ("top", "bottom"):
+                    h, w = h * (1 - 0.24 * pk), w * (1 + 0.07 * pk)
+                else:
+                    w, h = w * (1 - 0.24 * pk), h * (1 + 0.07 * pk)
             a = self._anchor_along(w, h)
             c = self._center_on_edge(self.edge, a, 0, w, h)
             self.neck_edge = self.edge
@@ -733,14 +740,14 @@ class Island(QtWidgets.QWidget):
             wave = None
             if poking:
                 ppt = self._poke_pt - QtCore.QPointF(wx, wy)
-                amp = self.poke.x * 7.5
-                sig2 = 2 * 24.0 ** 2
+                amp = self.poke.x * 6.5
+                sig2 = 2 * 60.0 ** 2
 
                 farv = {"top": (0, 1), "bottom": (0, -1), "left": (1, 0), "right": (-1, 0)}[self.edge]
 
                 def poke_w(px, py, nx, ny, ppt=ppt, amp=amp, sig2=sig2, farv=farv):
                     wgt = nx * farv[0] + ny * farv[1]       # 只让远离屏幕边的一侧被挤压
-                    if wgt <= 0.35:
+                    if wgt <= 0.2:
                         return 0.0
                     d2 = (px - ppt.x()) ** 2 + (py - ppt.y()) ** 2
                     return -amp * wgt * wgt * math.exp(-d2 / sig2)      # 正 = 向内凹，负 = 回弹外鼓
@@ -967,7 +974,7 @@ class Island(QtWidgets.QWidget):
             # 可穿透：鼠标掠过时把水滴"挤"一下，离开后带回弹地恢复
             gp = QtCore.QPointF(QtGui.QCursor.pos())
             lp = gp - QtCore.QPointF(self._win_origin)
-            near = self.body.adjusted(-10, -10, 10, 10).contains(lp)
+            near = self.body.adjusted(-28, -28, 28, 28).contains(lp)
             if near:
                 self._poke_pt = gp
                 if self.poke.target != 1.0:
