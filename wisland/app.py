@@ -319,6 +319,15 @@ def main():
         m.aboutToHide.connect(lambda: island.locks.discard("menu"))
         m.popup(pos)
     island.menu_requested.connect(show_menu)
+    # 导航：「主页」标签放在播放器封面正上方
+    def nav_anchor():
+        m = P["home"].media
+        if m.width() < 10:
+            return None
+        g = m.mapToGlobal(QtCore.QPoint(m.width() // 2, 0))
+        return island.nav.mapFromGlobal(g).x()
+    island.nav.anchor_fn = nav_anchor
+
     # 主页的「保持展开」「可穿透」按钮
     home = P["home"]
     home.a_pin.clicked.connect(lambda: island.set_pinned(not island.pinned()))

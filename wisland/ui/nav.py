@@ -35,7 +35,8 @@ class NavBar(QtWidgets.QWidget):
         self.setMouseTracking(True)
         self.font_ = ui_font(12.5, W.DemiBold)
         fm = QtGui.QFontMetrics(self.font_)
-        self.full_w = [ICON_W + fm.horizontalAdvance(lbl) + 30 for _, _, lbl in items]   # 文字右侧多留白
+        self.full_w = [ICON_W + fm.horizontalAdvance(lbl) + 46 for _, _, lbl in items]   # 选中时文字右侧留出更大空白
+        self.anchor_fn = None          # 返回第一个标签（主页）中心应对齐的 x（导航栏坐标），None = 整组居中
         self.w = [Spring(ICON_W, 260, 0.56, 0.05) for _ in items]
         self.hover = [Spring(0, 400, 1.0, 0.01) for _ in items]
         self.badges: dict[str, int] = {}
@@ -116,8 +117,15 @@ class NavBar(QtWidgets.QWidget):
         widths = [max(ICON_W * 0.7, s.x) for s in self.w]
         total = sum(widths) + GAP * (len(widths) - 1)
         right = sum(b.width() + 2 for b in self.right_buttons)
-        x = max(2.0, (self.width() - total) / 2)
-        x = min(x, max(2.0, self.width() - right - 4 - total))
+        x = (self.width() - total) / 2
+        if self.anchor_fn is not None:
+            try:
+                ax = self.anchor_fn()
+            except Exception:  # noqa: BLE001
+                ax = None
+            if ax is not None:
+                x = ax - widths[0] / 2          # 「主页」标签正对播放器封面
+        x = max(2.0, min(x, self.width() - right - 4 - total))
         h = self.height()
         out = []
         for w in widths:

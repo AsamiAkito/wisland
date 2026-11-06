@@ -228,6 +228,7 @@ class Island(QtWidgets.QWidget):
         self._floor_t: dict = {}
         self.poke = Spring(0, 380, 0.55, 0.004)
         self._poke_pt = QtCore.QPointF()
+        self._poke_sm = QtCore.QPointF()          # 平滑后的按压位置（凹陷跟着鼠标滑动）
         self._floor_on: dict = {}
         self._bd_shown = None
         self._bd_prev = None
@@ -546,6 +547,10 @@ class Island(QtWidgets.QWidget):
         for s in (self.sw, self.sh, self.fx, self.fy, self.along, self.gap, self.neck_s,
                   self.content_a, self.compact_a, self.poke):
             s.step(dt)
+        if abs(self.poke.x) > 0.01 or self.poke.target:
+            if self._poke_sm.isNull():
+                self._poke_sm = QtCore.QPointF(self._poke_pt)
+            self._poke_sm += (self._poke_pt - self._poke_sm) * 0.3
         if not self.expanded:
             # 小形象看向光标；靠近时开心
             c = self.body.center() + QtCore.QPointF(self._win_origin)
@@ -632,9 +637,9 @@ class Island(QtWidgets.QWidget):
             if abs(pk) > 0.002 and not self.expanded:
                 # 可穿透时被鼠标"按住"：整颗水滴朝屏幕边压扁、略微变宽，松开后带回弹
                 if self.edge in ("top", "bottom"):
-                    h, w = h * (1 - 0.24 * pk), w * (1 + 0.07 * pk)
+                    h, w = h * (1 - 0.16 * pk), w * (1 + 0.05 * pk)
                 else:
-                    w, h = w * (1 - 0.24 * pk), h * (1 + 0.07 * pk)
+                    w, h = w * (1 - 0.16 * pk), h * (1 + 0.05 * pk)
             a = self._anchor_along(w, h)
             c = self._center_on_edge(self.edge, a, 0, w, h)
             self.neck_edge = self.edge
@@ -738,22 +743,22 @@ class Island(QtWidgets.QWidget):
         if speed > 30 or playing_wave or poking:
             pts = body_points(lbody, radii, 4.0)
             wave = None
+            poke_params = None
             if poking:
-                ppt = self._poke_pt - QtCore.QPointF(wx, wy)
-                amp = clamp(abs(self.poke.x), 0, 1) * 3.6
-                tt = t_now
+                # 按压：沿"远离屏幕边"的方向整体位移（不是沿中心放射方向），外侧半边（含两端圆角）都参与
+                ppt = self._poke_sm - QtCore.QPointF(wx, wy)
+                amp = clamp(self.poke.x, -0.6, 1.2) * 8.0
                 farv = {"top": (0, 1), "bottom": (0, -1), "left": (1, 0), "right": (-1, 0)}[self.edge]
                 horiz = farv[0] == 0
-                u0 = ppt.x() if horiz else ppt.y()
-
-                def poke_w(px, py, nx, ny, amp=amp, farv=farv, horiz=horiz, u0=u0, tt=tt):
-                    wgt = nx * farv[0] + ny * farv[1]       # 只在远离屏幕边的一侧起伏，两侧与贴边处不动
-                    if wgt <= 0.2:
-                        return 0.0
-                    d = abs((px if horiz else py) - u0)
-                    # 从触点向左右扩散的水波：越远越弱
-                    return amp * wgt * wgt * math.cos(d * 0.085 - tt * 9.0) * math.exp(-d / 110.0)
-                wave = poke_w
+                c_u = lbody.center().x() if horiz else lbody.center().y()
+                half = max(20.0, (lbody.width() if horiz else lbody.height()) / 2)
+                depth = lbody.height() if horiz else lbody.width()
+                u0 = clamp((ppt.x() if horiz else ppt.y()), c_u - half, c_u + half)
+                sig = half * 0.5
+                near_line = {"top": lbody.top(), "bottom": lbody.bottom(), "left": lbody.left(), "right": lbody.right()}[self.edge]
+                poke_params = (amp, farv, horiz, u0, sig, near_line, depth)
+            else:
+                poke_params = None
             if playing_wave:
                 pk = clamp(self.peak_fn() * 1.5, 0, 1)
                 far = {"top": (0, 1), "bottom": (0, -1), "left": (1, 0), "right": (-1, 0)}[self.edge]
@@ -770,6 +775,20 @@ class Island(QtWidgets.QWidget):
                     return extra + pk * 2.4 * wgt * wgt * math.sin(u * 0.09 - tt * 7.0)
             pts = deform(pts, lbody.center().x(), lbody.center().y(), vx, vy,
                          min(w, h) / 2 + 12, wave)
+            if poke_params is not None:
+                amp, farv, horiz, u0, sig, near_line, depth = poke_params
+                out = []
+                for px, py in pts:
+                    v = abs((py if horiz else px) - near_line)          # 离屏幕边的距离
+                    wgt = clamp((v - depth * 0.3) / (depth * 0.7), 0.0, 1.0)
+                    if wgt > 0:
+                        d = ((px if horiz else py) - u0) / sig
+                        g = math.exp(-0.5 * d * d)
+                        disp = amp * wgt * wgt * (-g + 0.35 * (1.0 - g))   # 光标处凹进，其余略鼓（体积守恒）
+                        px += farv[0] * disp
+                        py += farv[1] * disp
+                    out.append((px, py))
+                pts = out
             body_p = poly_path(pts)
         else:
             body_p = body_path(lbody, radii)
@@ -954,7 +973,7 @@ class Island(QtWidgets.QWidget):
         if self.compact_a.x > 0.01:
             pk = clamp(self.poke.x, -0.5, 1.2) if (self.mode == "anchored" and not self.expanded) else 0.0
             horiz = self.edge in ("top", "bottom")
-            self.compact.squash = ((1 + 0.07 * pk, 1 - 0.24 * pk) if horiz else (1 - 0.24 * pk, 1 + 0.07 * pk))
+            self.compact.squash = ((1 + 0.05 * pk, 1 - 0.16 * pk) if horiz else (1 - 0.16 * pk, 1 + 0.05 * pk))
             p.save()
             p.setClipPath(path)               # 内容（含表情）不超出灵动岛
             self.compact.paint(p, bb, self.compact_a.x, self.peak_fn() if self.compact.mode() == "media" else 0.0)
