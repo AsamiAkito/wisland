@@ -113,24 +113,32 @@ class NavBar(QtWidgets.QWidget):
             self._t.stop()
 
     def _rects(self) -> list[QtCore.QRectF]:
-        """标签组水平居中（不压到右侧按钮）。"""
+        """「主页」标签固定在播放器封面正上方；最后一个标签放在与之对称的位置，
+        中间的标签按比例均分间距，整排左右居中。没有锚点时整组居中。"""
         widths = [max(ICON_W * 0.7, s.x) for s in self.w]
-        total = sum(widths) + GAP * (len(widths) - 1)
+        n = len(widths)
         right = sum(b.width() + 2 for b in self.right_buttons)
-        x = (self.width() - total) / 2
+        h = self.height()
+        ax = None
         if self.anchor_fn is not None:
             try:
                 ax = self.anchor_fn()
             except Exception:  # noqa: BLE001
                 ax = None
-            if ax is not None:
-                x = ax - widths[0] / 2          # 「主页」标签正对播放器封面
-        x = max(2.0, min(x, self.width() - right - 4 - total))
-        h = self.height()
+        if ax is not None and n > 1:
+            left = ax - widths[0] / 2
+            end = self.width() - ax + widths[-1] / 2          # 与主页标签对称
+            end = min(end, self.width() - right - 6)
+            gap = (end - left - sum(widths)) / (n - 1)
+            gap = max(GAP * 0.5, gap)
+        else:
+            gap = GAP
+            left = (self.width() - (sum(widths) + gap * (n - 1))) / 2
+        x = max(2.0, left)
         out = []
         for w in widths:
             out.append(QtCore.QRectF(x, 2, w, h - 4))
-            x += w + GAP
+            x += w + gap
         return out
 
     def _hit(self, pos: QtCore.QPointF) -> int:
