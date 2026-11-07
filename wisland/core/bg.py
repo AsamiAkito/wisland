@@ -48,9 +48,11 @@ def run_bg(fn: Callable, *args, on_done: Callable | None = None, on_error: Calla
         try:
             res = fn(*args)
         except Exception as e:  # noqa: BLE001
-            traceback.print_exc()
             if on_error:
+                # 调用方自己处理错误（例如后端没启动、网络超时）：不再打印整段堆栈
                 ui(lambda e=e: on_error(e))
+            else:
+                traceback.print_exc()
             return
         if on_done:
             ui(lambda: on_done(res))

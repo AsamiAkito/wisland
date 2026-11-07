@@ -301,7 +301,7 @@ def main():
             a = tm.addAction(("✓  " if cfg.get("island.theme") == mode else "    ") + label)
             a.triggered.connect(lambda _=False, m=mode: (cfg.set("island.theme", m), theme.set_mode(m)))
         em = menu.addMenu("展开方式")
-        for mode, label in (("hover", "悬停展开"), ("always", "常驻展开"), ("never", "保持收起")):
+        for mode, label in (("hover", "悬停展开"), ("always", "常驻展开"), ("never", "长关")):
             a = em.addAction(("✓  " if island.expand_mode() == mode else "    ") + label)
             a.triggered.connect(lambda _=False, m=mode: island.set_expand_mode(m))
         a = menu.addAction(("✓  " if island.passthrough() else "    ") + "可穿透")
@@ -332,9 +332,10 @@ def main():
 
     # 主页的「保持展开」「可穿透」按钮
     home = P["home"]
-    MODE_UI = {"hover": (G.EYE, "悬停展开"), "always": (G.PIN, "常驻展开"), "never": (G.EYE_OFF, "保持收起")}
+    MODE_UI = {"hover": (G.EYE, "悬停展开"), "always": (G.PIN, "常驻展开"), "never": (G.EYE_OFF, "长关")}
     NEXT = {"hover": "always", "always": "never", "never": "hover"}
-    home.a_pin.clicked.connect(lambda: island.set_expand_mode(NEXT[island.expand_mode()]))
+    # 按钮只在 常驻展开 ↔ 悬停展开 之间切换；长关用双击灵动岛切换
+    home.a_pin.clicked.connect(lambda: island.set_expand_mode("hover" if island.expand_mode() == "always" else "always"))
     home.a_pt.clicked.connect(lambda: island.set_passthrough(not island.passthrough()))
 
     def on_mode(mode):

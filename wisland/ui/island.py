@@ -165,6 +165,41 @@ class _Veil(QtWidgets.QWidget):
         p.end()
 
 
+class _BlankDoubleClick(QtCore.QObject):
+    """灵动岛展开后，双击空白区域（不是按钮 / 输入框等控件）也切换 悬停展开 ↔ 长关。"""
+
+    def __init__(self, island):
+        super().__init__(island)
+        self.island = island
+
+    def eventFilter(self, obj, ev):
+        if ev.type() != QtCore.QEvent.Type.MouseButtonDblClick or not isinstance(obj, QtWidgets.QWidget):
+            return False
+        isl = self.island
+        if obj is isl or obj.window() is not isl or ev.button() != Qt.MouseButton.LeftButton:
+            return False
+        if self._blank(obj, ev):
+            isl.toggle_long_off()
+            return True
+        return False
+
+    @staticmethod
+    def _blank(w, ev) -> bool:
+        from .nav import NavBar
+        from .pages.base import Page
+        from .widgets import Card
+        if isinstance(w, NavBar):
+            return w._hit(ev.position()) < 0
+        if isinstance(w, (Page, Card, QtWidgets.QStackedWidget)):
+            return True
+        if type(w) is QtWidgets.QWidget:                 # 普通容器（内容区、滚动区内层等）
+            return True
+        p = w.parentWidget()
+        if isinstance(p, QtWidgets.QAbstractScrollArea) and w is p.viewport():
+            return True
+        return False
+
+
 class Island(QtWidgets.QWidget):
     expanded_changed = QtCore.Signal(bool)
     hotkey = QtCore.Signal(str)
@@ -266,6 +301,9 @@ class Island(QtWidgets.QWidget):
         self.timer.timeout.connect(self._tick)
         self.poll = QtCore.QTimer(self, interval=25, timeout=self._poll_hover)
         self.lp_timer = QtCore.QTimer(self, singleShot=True, interval=420, timeout=self._long_press)
+        self._click_timer = QtCore.QTimer(self, singleShot=True, timeout=self._single_click)
+        self._dbl_filter = _BlankDoubleClick(self)
+        QtWidgets.QApplication.instance().installEventFilter(self._dbl_filter)
         self.backdrop.ready.connect(self._on_backdrop)
         theme.changed.connect(self.update)
 
@@ -1070,11 +1108,28 @@ class Island(QtWidgets.QWidget):
         self.lp_timer.stop()
         if self._press is not None and self.mode == "anchored" and not self.expanded \
                 and self.expand_mode() != "never":
-            self._press = None
+            self._click_timer.start(QtWidgets.QApplication.doubleClickInterval())
+        self._press = None
+
+    def _single_click(self):
+        if self.mode == "anchored" and not self.expanded and self.expand_mode() != "never":
             self.expand()
             self.locks.add("pin")
             QtCore.QTimer.singleShot(600, lambda: self.locks.discard("pin"))
-        self._press = None
+
+    def mouseDoubleClickEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self._inside(e.globalPosition().toPoint()):
+            self._click_timer.stop()
+            self._press = None
+            self.toggle_long_off()
+
+    def toggle_long_off(self):
+        """双击：悬停展开 ↔ 长关（常驻展开时双击也切到长关）。"""
+        new = "hover" if self.expand_mode() == "never" else "never"
+        self.set_expand_mode(new)
+        if not self.expanded:
+            self.activity({"glyph": G.EYE_OFF if new == "never" else G.EYE,
+                           "title": "长关" if new == "never" else "悬停展开"}, 1.6)
 
     def _long_press(self):
         pass
