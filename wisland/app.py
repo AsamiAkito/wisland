@@ -109,6 +109,7 @@ def main():
     from .services.notify import NotifyService
     from .services.stocks import StockService
     from .services.system import RadioService, WindowService
+    from .services.lyrics import LyricsService
     from .services.translate import TranslateService
     from .services.weather import WeatherService, weather_glyph
     from .ui.island import Island
@@ -131,6 +132,7 @@ def main():
     ctx.weather = WeatherService()
     ctx.clash = ClashService()
     ctx.translate = TranslateService()
+    ctx.lyrics = LyricsService()
     ctx.clipboard = ClipboardService()
     ctx.mailcheck = MailCheckService()
     from .live.service import LiveService
@@ -158,9 +160,48 @@ def main():
     compact = island.compact
 
     # ---------------- 媒体 ----------------
+    media_st = {"key": None, "lyr": None, "prev_view": None, "playing": False}
+    back_timer = QtCore.QTimer(app, singleShot=True, interval=8000)
+
+    def update_lyrics(m):
+        k = ctx.lyrics.key(m) if m.get("title") else None
+        if k != media_st["lyr"]:
+            media_st["lyr"] = k
+            compact.set_lyrics(None)
+        if k:
+            lyr = ctx.lyrics.get(m)
+            if lyr is not None and compact.lyrics is not lyr:
+                compact.set_lyrics(lyr)
+
+    def on_lyrics_ready(k):
+        if k == media_st["lyr"]:
+            update_lyrics(compact.media)
+            island._kick()
+    ctx.lyrics.ready.connect(on_lyrics_ready)
+
+    def back_to_view():
+        # 暂停一段时间后回到原来的收起视图（时间天气 / 小形象）
+        if not compact.playing() and media_st["prev_view"] and compact.view == "music":
+            compact.set_view(media_st["prev_view"])
+            island._kick()
+        media_st["prev_view"] = None
+    back_timer.timeout.connect(back_to_view)
+
     def on_media(m):
         compact.set_media(m)
         P["home"].media.set_media(m)
+        update_lyrics(m)
+        playing = bool(m.get("playing") and m.get("title"))
+        key = (m.get("app_id"), m.get("title"), m.get("artist"))
+        if cfg.get("media.auto_show", True):
+            if playing and (not media_st["playing"] or key != media_st["key"]):
+                back_timer.stop()
+                if compact.view in ("clock", "pet"):
+                    media_st["prev_view"] = compact.view
+                    compact.set_view("music")
+            elif not playing and media_st["playing"] and media_st["prev_view"]:
+                back_timer.start()
+        media_st["playing"], media_st["key"] = playing, key
         island._kick()
     ctx.media.changed.connect(on_media)
 

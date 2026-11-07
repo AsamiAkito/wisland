@@ -292,10 +292,42 @@ class CompactView:
         self.pet = PetFace()
         self._bars = [0.0] * 4
         self._peak = 0.0
+        # 歌词（由 app 设置：services.lyrics.Lyrics 或 None）
+        self.lyrics = None
+        self._lyr_w = 0.0
+        self._lyr_idx = -2
+        self._lyr_prev = ""
+        self._lyr_t = 0.0
+        self._lyr_cur = ""
 
     # --- 数据 ---
     def set_media(self, m: dict):
         self.media = m or {}
+
+    def set_lyrics(self, lyr):
+        """设置当前歌曲的歌词；按最长一行确定胶囊宽度（避免每句都改变宽度）。"""
+        self.lyrics = lyr if lyr else None
+        self._lyr_idx, self._lyr_prev = -2, ""
+        if self.lyrics:
+            fm = QtGui.QFontMetrics(ui_font(13, W.Medium))
+            widest = max(fm.horizontalAdvance(x) for x in self.lyrics.lines)
+            self._lyr_w = clamp(widest + 120, 300, 470)
+        else:
+            self._lyr_w = 0.0
+
+    def media_pos(self) -> float:
+        m = self.media
+        pos = float(m.get("position") or 0)
+        if m.get("playing"):
+            pos += time.monotonic() - float(m.get("stamp") or time.monotonic())
+        dur = float(m.get("duration") or 0)
+        return min(pos, dur) if dur > 0 else pos
+
+    def lyric_now(self) -> tuple[int, str, str]:
+        """-> (行号, 歌词, 翻译)；没有歌词 / 没在播放时行号为 -1。"""
+        if not self.lyrics or not self.media.get("title"):
+            return -1, "", ""
+        return self.lyrics.at(self.media_pos())
 
     def set_cover(self, img):
         self.cover = rounded_pixmap(img, 26, 7) if img is not None else None
@@ -355,7 +387,7 @@ class CompactView:
         if m == "media":
             if not self.playing() and not self.media.get("title"):
                 return 190 + nb * 12, H_MEDIA
-            return 300 + nb * 12, H_MEDIA
+            return max(300, self._lyr_w) + nb * 12, H_MEDIA
         if m == "pet":
             return 150 + nb * 14, H_IDLE
         w = 150 + (64 if self.weather else 0) + nb * 14
@@ -500,18 +532,33 @@ class CompactView:
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(c)
             p.drawRoundedRect(br, 1.8, 1.8)
-        # 中间：标题 · 歌手，过长时滚动
+        # 中间：当前歌词（有歌词时）或 标题 · 歌手，过长时滚动
         tx = cr.right() + 10
         tw = bx - 10 - tx
         title = self.media.get("title", "")
         artist = self.media.get("artist", "")
         text = f"{title}  ·  {artist}" if artist else title
+        idx, line, _tr = self.lyric_now()
+        if line:
+            text = line
+        if idx != self._lyr_idx:                      # 换行：旧行上移淡出，新行从下方淡入
+            self._lyr_prev = self._lyr_cur if self._lyr_idx != -2 else ""
+            self._lyr_idx, self._lyr_t = idx, t
+        self._lyr_cur = text
+        k = ease_out((t - self._lyr_t) / 0.32)
         p.setFont(ui_font(13, W.Medium))
         fm = QtGui.QFontMetrics(p.font())
         full = fm.horizontalAdvance(text)
         p.save()
         p.setClipRect(QtCore.QRectF(tx, r.y(), tw, r.height()))
-        p.setPen(theme.text(a))
+        if k < 1 and self._lyr_prev:
+            p.setPen(theme.text(a * (1 - k)))
+            p.drawText(QtCore.QRectF(tx, r.y() - 9 * k, tw, r.height()),
+                       Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                       fm.elidedText(self._lyr_prev, Qt.TextElideMode.ElideRight, int(tw)))
+        p.translate(0, 9 * (1 - k) if self._lyr_prev else 0)
+        p.setPen(theme.text(a * (k if self._lyr_prev else 1.0)))
+        t = t - self._lyr_t                           # 滚动从这一行出现时开始计时
         if full <= tw:
             p.drawText(QtCore.QRectF(tx, r.y(), tw, r.height()), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
         else:

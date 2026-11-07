@@ -23,6 +23,9 @@
     "clipboard": "Ctrl+Alt+V"
   },
   "media": {
+    "auto_show": true,
+    "lyrics": true,
+    "netease_log": true,
     "priority": [
       "cloudmusic",
       "bilibili",

@@ -39,7 +39,12 @@ DEFAULTS: dict = {
         "translate": "Ctrl+Alt+J",
         "clipboard": "Ctrl+Alt+V",
     },
-    "media": {"priority": ["cloudmusic", "bilibili", "chrome", "zen", "msedge", "firefox"]},
+    "media": {
+        "auto_show": True,           # 开始播放时收起态自动切到音乐（暂停 8 秒后切回）
+        "lyrics": True,              # 收起态显示歌词（网易云公开歌词接口）
+        "netease_log": True,         # 读取网易云本地日志获得播放状态与进度（网易云默认不接入系统媒体控件）
+        "priority": ["cloudmusic", "bilibili", "chrome", "zen", "msedge", "firefox"],
+    },
     "notify": {
         # wpndatabase 中的 NotificationHandler.PrimaryId 前缀 -> 显示名 / 类型
         "toast_apps": {

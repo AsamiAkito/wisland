@@ -15,6 +15,7 @@ import traceback
 from PySide6 import QtCore, QtGui
 
 from wisland.core.config import cfg
+from wisland.services.netease import NeteaseLog
 
 try:
     from winrt.windows.media.control import (
@@ -76,11 +77,24 @@ def _secs(v) -> float:
         return 0.0
 
 
+def _download_cover(url: str):
+    """下载网易云专辑封面（小图）-> QImage | None。"""
+    try:
+        import httpx
+        u = url.replace("http://", "https://", 1)
+        r = httpx.get(u + ("&" if "?" in u else "?") + "param=240y240", timeout=8, follow_redirects=True)
+        r.raise_for_status()
+        img = QtGui.QImage.fromData(r.content)
+        return None if img.isNull() else img
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _empty_state() -> dict:
     return {
         "has_session": False, "app_id": "", "app_name": "", "title": "", "artist": "",
         "album": "", "playing": False, "position": 0.0, "duration": 0.0,
-        "stamp": time.monotonic(), "can_prev": False, "can_next": False,
+        "stamp": time.monotonic(), "can_prev": False, "can_next": False, "song_id": "", "source": "",
     }
 
 
@@ -99,6 +113,7 @@ class MediaService(QtCore.QObject):
         self._track_key = None
         self._cover_tries = 0
         self._last_emit = None
+        self._netease = NeteaseLog()
 
     # ---------------- 生命周期 ----------------
     def start(self):
@@ -180,6 +195,27 @@ class MediaService(QtCore.QObject):
     async def _poll(self):
         sessions = list(self._mgr.get_sessions() or [])
         s = self._choose(sessions)
+        # 网易云默认不接入系统媒体控件（即使接入也没有进度），优先用它的本地日志
+        ne = None
+        if cfg.get("media.netease_log", True):
+            try:
+                self._netease.poll()
+                ne = self._netease.snapshot()
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+        if ne is not None:
+            aid = (s.source_app_user_model_id or "").lower() if s is not None else ""
+            smtc_playing = False
+            if s is not None:
+                try:
+                    info = s.get_playback_info()
+                    smtc_playing = info is not None and int(info.playback_status) == _PLAYING
+                except Exception:  # noqa: BLE001
+                    pass
+            if s is None or "cloudmusic" in aid or (ne["playing"] and not smtc_playing):
+                self._session = s if s is not None and "cloudmusic" in aid else None
+                await self._publish_netease(ne)
+                return
         self._session = s
         if s is None:
             st = _empty_state()
@@ -231,7 +267,7 @@ class MediaService(QtCore.QObject):
             "has_session": True, "app_id": app_id, "app_name": friendly_name(app_id),
             "title": title, "artist": artist, "album": album, "playing": playing,
             "position": pos, "duration": dur, "stamp": time.monotonic(),
-            "can_prev": can_prev, "can_next": can_next,
+            "can_prev": can_prev, "can_next": can_next, "song_id": "", "source": "smtc",
         }
 
         key = (app_id, title, artist, album)
@@ -249,6 +285,22 @@ class MediaService(QtCore.QObject):
             if img is not None:
                 self._cover_tries = 0
                 self.cover_changed.emit(img)
+        self._publish(st)
+
+    async def _publish_netease(self, ne: dict):
+        st = {
+            "has_session": True, "app_id": "cloudmusic.exe", "app_name": "网易云音乐",
+            "title": ne["title"], "artist": ne["artist"], "album": ne["album"], "playing": ne["playing"],
+            "position": ne["position"], "duration": ne["duration"], "stamp": ne["stamp"],
+            "can_prev": True, "can_next": True, "song_id": ne["song_id"], "source": "netease",
+        }
+        key = ("netease", ne["song_id"])
+        if key != self._track_key:
+            self._track_key = key
+            img = None
+            if ne.get("cover"):
+                img = await asyncio.get_running_loop().run_in_executor(None, _download_cover, ne["cover"])
+            self.cover_changed.emit(img)
         self._publish(st)
 
     def _publish(self, st: dict, force: bool = False):
