@@ -7,6 +7,7 @@ import time
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ...core.config import cfg
+from ..anim import clamp
 from ..theme import G, W, icon_font, theme, ui_font
 from ..widgets import (Segmented, Card, Hoverable, IconButton, Label, LineEdit, PillButton, ScrollArea, TextEdit, hbox, painter,
                        vbox)
@@ -214,6 +215,10 @@ class LiveView(QtWidgets.QWidget):
         self.tokens_fn = None               # text -> list[Token]（学习服务提供）
         self._hits: list[tuple[QtCore.QRectF, object, dict]] = []
         self._hover = None
+        self.scroll = 0.0                   # 距离底部（最新一行）的滚动距离，0 = 跟随最新
+        self._content_h = 0.0
+        self._flow_cache: dict = {}
+        self._latest_btn: QtCore.QRectF | None = None
         self.setMouseTracking(True)
         theme.changed.connect(self.update)
 
@@ -233,11 +238,13 @@ class LiveView(QtWidgets.QWidget):
         return r
 
     def on_segment(self, sid, jp):
+        before = self._content_h
         r = self._row(sid)
         r["jp"] = jp
         if not r["zh"] and self.partial_zh:
             r["zh"] = self.partial_zh          # 草稿译文先挂到这一句，等最终译文覆盖
         self.partial, self.partial_zh = "", ""
+        self._grow(before)
         self.update()
 
     def on_live(self, sid, zh):
@@ -249,8 +256,10 @@ class LiveView(QtWidgets.QWidget):
         self.update()
 
     def on_final(self, sid, zh):
+        before = self._content_h
         r = self._row(sid)
         r["zh"], r["final"] = zh, True
+        self._grow(before)
         self.update()
 
     def on_partial(self, jp):
@@ -259,11 +268,43 @@ class LiveView(QtWidgets.QWidget):
 
     def clear(self):
         self.rows, self.partial, self.partial_zh = [], "", ""
+        self.scroll = 0.0
+        self._flow_cache.clear()
         self.update()
+
+    # ---------- 滚动：滚轮上翻看历史；有新内容时停在原处，点「回到最新」或滚到底恢复跟随 ----------
+    def _max_scroll(self) -> float:
+        return max(0.0, self._content_h - self.height() + 8)
+
+    def wheelEvent(self, e):
+        d = e.angleDelta().y() or e.pixelDelta().y()
+        if not d:
+            e.ignore()
+            return
+        self.scroll = clamp(self.scroll + d / 120.0 * 52.0, 0.0, self._max_scroll())
+        self.update()
+        e.accept()
+
+    def _grow(self, before: float):
+        """内容变高时：如果正在看历史，就把滚动量加上增量，保持画面不动。"""
+        if self.scroll > 0:
+            self._measure()
+            self.scroll = clamp(self.scroll + (self._content_h - before), 0.0, self._max_scroll())
 
     # ---------- 日语行：按词排版（可点击） ----------
     def _flow(self, text: str, w: float, fm: QtGui.QFontMetrics, clickable: bool):
-        """返回 [(x, line_index, width, Token|None, piece)] 与行数。"""
+        """返回 [(x, line_index, width, Token|None, piece)] 与行数（按文本 / 宽度缓存，分词只做一次）。"""
+        key = (text, int(w), clickable)
+        hit = self._flow_cache.get(key)
+        if hit is not None:
+            return hit
+        res = self._flow_raw(text, w, fm, clickable)
+        if len(self._flow_cache) > 400:
+            self._flow_cache.clear()
+        self._flow_cache[key] = res
+        return res
+
+    def _flow_raw(self, text: str, w: float, fm: QtGui.QFontMetrics, clickable: bool):
         toks = self.tokens_fn(text) if (clickable and self.tokens_fn) else []
         pieces = [(t.surface, t) for t in toks] if toks else [(ch, None) for ch in text]
         out, x, line = [], 0.0, 0
@@ -278,7 +319,9 @@ class LiveView(QtWidgets.QWidget):
     def paintEvent(self, e):
         p = painter(self)
         w = self.width() - 8
-        y = self.height() - 4
+        self._measure()
+        self.scroll = clamp(self.scroll, 0.0, self._max_scroll())
+        y = self.height() - 4 + self.scroll
         fj, fz = ui_font(12.5), ui_font(16, W.Medium)
         fmj, fmz = QtGui.QFontMetrics(fj), QtGui.QFontMetrics(fz)
         lh = fmj.height() + 1
@@ -298,11 +341,14 @@ class LiveView(QtWidgets.QWidget):
             draft = bool(it.get("draft"))
             flow, nlines = self._flow(it.get("jp", ""), w, fmj, not draft)
             hj = nlines * lh
+            if y - hz - hj - 2 > self.height():          # 整条都在可见区下方（正在看历史）：跳过
+                y -= hz + hj + 2 + 12
+                continue
             y -= hz
             if zh:
                 p.setFont(fz)
                 p.setPen(theme.text(1.0 if it.get("final") else 0.8))
-                p.drawText(QtCore.QRect(4, y, w, hz), flags, zh)
+                p.drawText(QtCore.QRect(4, int(y), w, hz), flags, zh)
             y -= hj + 2
             p.setFont(fj)
             for x, line, pw, tok, piece in flow:
@@ -320,6 +366,38 @@ class LiveView(QtWidgets.QWidget):
             y -= 12
             if y < 0:
                 break
+        # 正在看历史：右下角「回到最新」
+        self._latest_btn = None
+        if self.scroll > 1:
+            f = ui_font(11.5, W.Medium)
+            txt = "↓ 回到最新"
+            bw = QtGui.QFontMetrics(f).horizontalAdvance(txt) + 22
+            br = QtCore.QRectF(self.width() - bw - 6, self.height() - 30, bw, 24)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(theme.card(1.8))
+            p.drawRoundedRect(br, 12, 12)
+            p.setFont(f)
+            p.setPen(theme.text())
+            p.drawText(br, Qt.AlignmentFlag.AlignCenter, txt)
+            self._latest_btn = br
+
+    def _measure(self):
+        """全部字幕的总高度（用于滚动范围）。"""
+        w = self.width() - 8
+        fj, fz = ui_font(12.5), ui_font(16, W.Medium)
+        fmj, fmz = QtGui.QFontMetrics(fj), QtGui.QFontMetrics(fz)
+        lh = fmj.height() + 1
+        flags = int(Qt.AlignmentFlag.AlignLeft) | int(Qt.TextFlag.TextWordWrap)
+        items = list(self.rows)
+        if self.partial or self.partial_zh:
+            items.append({"jp": self.partial, "zh": self.partial_zh, "draft": True})
+        total = 4.0
+        for it in items:
+            zh = it.get("zh", "")
+            hz = fmz.boundingRect(QtCore.QRect(0, 0, w, 10000), flags, zh).height() if zh else 0
+            _, nlines = self._flow(it.get("jp", ""), w, fmj, not it.get("draft"))
+            total += hz + nlines * lh + 2 + 12
+        self._content_h = total
 
     def _hit(self, pos):
         for r, tok, row, key in self._hits:
@@ -341,6 +419,10 @@ class LiveView(QtWidgets.QWidget):
             self.update()
 
     def mouseReleaseEvent(self, e):
+        if self._latest_btn is not None and self._latest_btn.contains(e.position()):
+            self.scroll = 0.0
+            self.update()
+            return
         h = self._hit(e.position())
         if h and e.button() == Qt.MouseButton.LeftButton:
             self.word_clicked.emit(h[1], h[2])

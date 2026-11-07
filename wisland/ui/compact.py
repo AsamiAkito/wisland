@@ -18,6 +18,9 @@ Qt = QtCore.Qt
 H_IDLE = 34
 H_MEDIA = 36
 H_ACT = 40
+H_SUB = 60          # 实时字幕：上日语、下中文两行
+SUB_HOLD_S = 7.0    # 最后一句字幕之后保留多久再回到原来的视图
+W_TEXT = 640        # 显示歌词 / 实时字幕时的胶囊宽度（约为普通收起态的 3 倍）
 
 
 class PetFace:
@@ -299,6 +302,14 @@ class CompactView:
         self._lyr_prev = ""
         self._lyr_t = 0.0
         self._lyr_cur = ""
+        # 实时字幕（收起态两行：日语 / 中文）
+        self.sub_on = False
+        self.sub_jp = ""
+        self.sub_zh = ""
+        self.sub_t = -100.0
+        # 收起态音乐视图右侧的播放 / 暂停键（灵动岛坐标，绘制时更新）
+        self.play_rect: QtCore.QRectF | None = None
+        self.play_hover = 0.0
 
     # --- 数据 ---
     def set_media(self, m: dict):
@@ -311,7 +322,7 @@ class CompactView:
         if self.lyrics:
             fm = QtGui.QFontMetrics(ui_font(13, W.Medium))
             widest = max(fm.horizontalAdvance(x) for x in self.lyrics.lines)
-            self._lyr_w = clamp(widest + 120, 300, 470)
+            self._lyr_w = clamp(widest + 160, W_TEXT, 760)      # 宽度按整首最长一句固定，不随每句变化
         else:
             self._lyr_w = 0.0
 
@@ -328,6 +339,23 @@ class CompactView:
         if not self.lyrics or not self.media.get("title"):
             return -1, "", ""
         return self.lyrics.at(self.media_pos())
+
+    # --- 实时字幕 ---
+    def set_sub_running(self, on: bool):
+        self.sub_on = bool(on)
+        if not on:
+            self.sub_jp = self.sub_zh = ""
+            self.sub_t = -100.0
+
+    def set_sub(self, jp: str | None = None, zh: str | None = None):
+        if jp is not None:
+            self.sub_jp = jp
+        if zh is not None:
+            self.sub_zh = zh
+        self.sub_t = time.monotonic()
+
+    def sub_active(self) -> bool:
+        return self.sub_on and bool(self.sub_jp or self.sub_zh) and time.monotonic() - self.sub_t < SUB_HOLD_S
 
     def set_cover(self, img):
         self.cover = rounded_pixmap(img, 26, 7) if img is not None else None
@@ -360,6 +388,9 @@ class CompactView:
         now = time.monotonic()
         if self.activity and now < self.activity["until"]:
             m = "activity"
+        elif self.sub_active():
+            m = "subtitle"            # 有人在说话时字幕优先；安静几秒后回到原视图（音乐 / 时间 / 小形象）
+            self.activity = None
         else:
             self.activity = None
             m = {"music": "media", "pet": "pet"}.get(self.view, "idle")
@@ -370,7 +401,7 @@ class CompactView:
 
     def busy(self) -> bool:
         """是否需要持续动画帧。"""
-        return self.mode() in ("media", "activity", "pet") or time.monotonic() - self._view_t < 1.4
+        return self.mode() in ("media", "activity", "pet", "subtitle") or time.monotonic() - self._view_t < 1.4
 
     # --- 尺寸 ---
     def size_hint(self) -> tuple[float, float]:
@@ -384,10 +415,12 @@ class CompactView:
             fm = QtGui.QFontMetrics(ui_font(13, W.DemiBold))
             w = 70 + fm.horizontalAdvance(a.get("title", "")) + QtGui.QFontMetrics(ui_font(12)).horizontalAdvance(a.get("sub", ""))
             return clamp(w + 24, 220, 460), H_ACT
+        if m == "subtitle":
+            return W_TEXT + nb * 12, H_SUB                        # 固定宽度：说话时不会一直伸缩
         if m == "media":
             if not self.playing() and not self.media.get("title"):
                 return 190 + nb * 12, H_MEDIA
-            return max(300, self._lyr_w) + nb * 12, H_MEDIA
+            return max(300, self._lyr_w) + 34 + nb * 12, H_MEDIA
         if m == "pet":
             return 150 + nb * 14, H_IDLE
         w = 150 + (64 if self.weather else 0) + nb * 14
@@ -403,8 +436,12 @@ class CompactView:
         self._peak = self._peak * 0.6 + peak * 0.4
         p.save()
         p.setClipRect(r.adjusted(6, 0, -6, 0), Qt.ClipOperation.IntersectClip)
+        if m != "media":
+            self.play_rect = None
         if m == "activity":
             self._paint_activity(p, r, a)
+        elif m == "subtitle":
+            self._paint_subtitle(p, r, a)
         elif m == "media":
             if not self.media.get("title"):
                 self._paint_no_media(p, r, a)
@@ -435,6 +472,35 @@ class CompactView:
             w = 9 if on else 3.4
             x = cx + (i - (n - 1) / 2) * 9
             p.drawRoundedRect(QtCore.QRectF(x - w / 2, y - 1.7, w, 3.4), 1.7, 1.7)
+
+    def _paint_subtitle(self, p, r, a):
+        """两行字幕：上面日语（小字，较淡），下面中文（大字）；太长时保留结尾（最新的话）。"""
+        x = r.x() + 18
+        w = r.width() - 36 - (self._badges_w() if any(self.badges.values()) else 0)
+        if any(self.badges.values()):
+            self._badges(p, r.right() - 14, r.y() + 16, a)
+        cy = r.center().y()
+        fj, fz = ui_font(12), ui_font(15, W.DemiBold)
+        fmj, fmz = QtGui.QFontMetrics(fj), QtGui.QFontMetrics(fz)
+
+        def tail(fm, text):
+            text = " ".join((text or "").split())
+            if fm.horizontalAdvance(text) <= w:
+                return text
+            return fm.elidedText(text, Qt.TextElideMode.ElideLeft, int(w))
+        jp = tail(fmj, self.sub_jp)
+        zh = tail(fmz, self.sub_zh) or "…"
+        top = QtCore.QRectF(x, cy - 22, w, 18)
+        bot = QtCore.QRectF(x, cy - 3, w, 24)
+        p.setFont(fj)
+        p.setPen(theme.text(0.62 * a))
+        p.drawText(top, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter, jp)
+        p.setFont(fz)
+        p.setPen(theme.text(a))
+        p.drawText(bot, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter, zh)
+
+    def _badges_w(self) -> float:
+        return 12 + 12 * sum(1 for v in self.badges.values() if v)
 
     def _paint_no_media(self, p, r, a):
         cy = r.center().y()
@@ -517,10 +583,22 @@ class CompactView:
             p.setPen(theme.text(0.8))
             p.drawText(cr, Qt.AlignmentFlag.AlignCenter, G.MUSIC)
         p.setOpacity(1.0)
-        # 右侧：音频律动条（跟随系统输出峰值）
+        # 最右侧：播放 / 暂停键（收起时也能直接点）；左边是音频律动条（跟随系统输出峰值）
+        right = self._badges(p, r.right() - 14, cy, a) - 4 if any(self.badges.values()) else r.right() - 8
+        pr = QtCore.QRectF(right - 28, cy - 14, 28, 28)
+        self.play_rect = pr
+        hov = self.play_hover
+        if hov > 0.01:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(theme.hover() if hasattr(theme, "hover") else theme.card(1.2))
+            p.setOpacity(a * hov)
+            p.drawEllipse(pr.adjusted(1, 1, -1, -1))
+            p.setOpacity(1.0)
+        p.setFont(icon_font(14))
+        p.setPen(theme.text(a))
+        p.drawText(pr, Qt.AlignmentFlag.AlignCenter, G.PAUSE if self.media.get("playing") else G.PLAY)
         bars_w = 26
-        bx = r.right() - 16 - bars_w
-        bx = self._badges(p, r.right() - 14, cy, a) - bars_w - 6 if any(self.badges.values()) else bx
+        bx = pr.left() - 6 - bars_w
         t = time.monotonic()
         pk = clamp(self._peak * 1.6, 0, 1)
         for i in range(4):
@@ -554,13 +632,15 @@ class CompactView:
         if k < 1 and self._lyr_prev:
             p.setPen(theme.text(a * (1 - k)))
             p.drawText(QtCore.QRectF(tx, r.y() - 9 * k, tw, r.height()),
-                       Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                       Qt.AlignmentFlag.AlignVCenter | (Qt.AlignmentFlag.AlignHCenter if line else Qt.AlignmentFlag.AlignLeft),
                        fm.elidedText(self._lyr_prev, Qt.TextElideMode.ElideRight, int(tw)))
         p.translate(0, 9 * (1 - k) if self._lyr_prev else 0)
         p.setPen(theme.text(a * (k if self._lyr_prev else 1.0)))
         t = t - self._lyr_t                           # 滚动从这一行出现时开始计时
         if full <= tw:
-            p.drawText(QtCore.QRectF(tx, r.y(), tw, r.height()), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
+            # 歌词居中显示；歌名 · 歌手靠左
+            h_al = Qt.AlignmentFlag.AlignHCenter if line else Qt.AlignmentFlag.AlignLeft
+            p.drawText(QtCore.QRectF(tx, r.y(), tw, r.height()), Qt.AlignmentFlag.AlignVCenter | h_al, text)
         else:
             gap = 40
             period = (full + gap) / 34.0      # 34 px/s

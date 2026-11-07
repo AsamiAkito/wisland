@@ -211,6 +211,8 @@ class Island(QtWidgets.QWidget):
     pin_changed = QtCore.Signal(bool)
     mode_changed = QtCore.Signal(str)
 
+    play_pause_requested = QtCore.Signal()      # 收起态音乐视图的播放 / 暂停键
+
     def __init__(self, pages: list, peak_fn=None):
         super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
                          | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.NoDropShadowWindowHint)
@@ -289,7 +291,7 @@ class Island(QtWidgets.QWidget):
         self.content.hide()
         self.veil = _Veil(self)
         self._opacity: QtWidgets.QGraphicsOpacityEffect | None = None
-        default = cfg.get("island.default_tab", "home")
+        default = cfg.get("island.last_tab") or cfg.get("island.default_tab", "home")
         self._page_key = default if default in self.nav.keys() else self.nav.keys()[0]
         self.nav.set_current(self._page_key)
         self.stack.setCurrentIndex(self.nav.keys().index(self._page_key))
@@ -354,10 +356,8 @@ class Island(QtWidgets.QWidget):
 
     # ================================================================ 展开 / 收起
     def expanded_size(self) -> tuple[float, float]:
-        """打开时的尺寸（按默认页 / 当前页的高度）。"""
-        default = cfg.get("island.default_tab", "home")
-        keys = self.nav.keys()
-        pg = self.pages[keys.index(default)] if default in keys else self.pages[self.stack.currentIndex()]
+        """打开时的尺寸（按上次停留的页面的高度）。"""
+        pg = self.pages[self.stack.currentIndex()]
         return EXP_W, PAD - 2 + NAV_H + 8 + pg.preferred_height() + PAD
 
     def target_size(self) -> tuple[float, float]:
@@ -371,9 +371,8 @@ class Island(QtWidgets.QWidget):
         if self.mode != "anchored" or self._fs_hidden:
             return
         if not self.expanded:
-            # 每次打开都从主页开始（热键 / 托盘等指定了页面的除外）
-            default = cfg.get("island.default_tab", "home")
-            self.show_page(page or (default if default in self.nav.keys() else self.nav.keys()[0]))
+            # 打开时停留在上次收起前的页面（热键 / 托盘等指定了页面的除外）
+            self.show_page(page or self._page_key)
         elif page:
             self.show_page(page)
         if not self.expanded:
@@ -404,6 +403,8 @@ class Island(QtWidgets.QWidget):
             self._apply_passthrough()
         self.locks.discard("pin")
         self.pages[self.stack.currentIndex()].on_hide()
+        if cfg.get("island.last_tab") != self._page_key:
+            cfg.set("island.last_tab", self._page_key)          # 下次（包括重启后）打开仍是这一页
         self.expanded_changed.emit(False)
         self._kick()
 
@@ -1062,6 +1063,14 @@ class Island(QtWidgets.QWidget):
             elif self.poke.target != 0.0:
                 self.poke.to(0.0, 300, 0.22)          # 欠阻尼：弹回时会外鼓几下
                 self._kick()
+        on_btn = inside and self._on_play_button(QtCore.QPointF(QtGui.QCursor.pos()) - QtCore.QPointF(self._win_origin))
+        hv = 1.0 if on_btn and not self.passthrough() else 0.0
+        if abs(self.compact.play_hover - hv) > 0.01:
+            self.compact.play_hover += (hv - self.compact.play_hover) * 0.5
+            self._kick()
+        if on_btn and not self.expanded:
+            self._hover_since = None              # 在播放键上停留不展开
+            return
         if inside and self.passthrough():
             inside = False                        # 可穿透：鼠标视为不在灵动岛上（只响应右键）
             self._hover_since = None
@@ -1104,8 +1113,17 @@ class Island(QtWidgets.QWidget):
             self._press = None
             self.begin_drag(QtGui.QCursor.pos())
 
+    def _on_play_button(self, local: QtCore.QPointF) -> bool:
+        r = self.compact.play_rect
+        return (r is not None and not self.expanded and self.compact.mode() == "media"
+                and r.adjusted(-6, -8, 6, 8).contains(local))
+
     def mouseReleaseEvent(self, e):
         self.lp_timer.stop()
+        if self._press is not None and self._on_play_button(e.position()) and self._on_play_button(self._press):
+            self._press = None
+            self.play_pause_requested.emit()
+            return
         if self._press is not None and self.mode == "anchored" and not self.expanded \
                 and self.expand_mode() != "never":
             self._click_timer.start(QtWidgets.QApplication.doubleClickInterval())
@@ -1118,6 +1136,9 @@ class Island(QtWidgets.QWidget):
             QtCore.QTimer.singleShot(600, lambda: self.locks.discard("pin"))
 
     def mouseDoubleClickEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton and self._on_play_button(e.position()):
+            self.play_pause_requested.emit()       # 快速连点播放键：当作第二次点击，不切换长关
+            return
         if e.button() == Qt.MouseButton.LeftButton and self._inside(e.globalPosition().toPoint()):
             self._click_timer.stop()
             self._press = None

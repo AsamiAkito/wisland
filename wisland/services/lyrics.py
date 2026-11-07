@@ -126,6 +126,8 @@ class LyricsService(QtCore.QObject):
         if not songs:
             return ""
         dur = float(m.get("duration") or 0)
+        if not (30 <= dur <= 15 * 60):
+            return ""            # 不知道时长 / 时长不像一首歌（视频、番剧等）：不按歌名猜歌词
         name = title.lower()
 
         def score(s):

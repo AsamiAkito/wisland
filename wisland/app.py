@@ -301,17 +301,34 @@ def main():
     ctx.translate.failed.connect(ctx.actions.on_trans_failed)
 
     # ---------------- 实时字幕：收起态显示最新一句 ----------------
-    def on_sub(sid, zh):
-        if island.expanded or not zh:
-            return
-        act = {"type": "subtitle", "glyph": G.LIVE, "title": zh, "sub": ""}
-        if compact.activity and compact.activity.get("type") == "subtitle":
-            compact.update_activity(**act, until=time.monotonic() + 8)
-        else:
-            island.activity(act, 8)
+    # 收起态两行显示：上面日语、下面中文；有人说话时优先显示，安静几秒后回到原视图（不打断音乐）
+    sub_st = {"sid": None}
+
+    def on_partial(jp):
+        if jp:
+            compact.set_sub(jp=jp)
+            island._kick()
+
+    def on_segment(sid, jp):
+        if sid != sub_st["sid"]:
+            sub_st["sid"] = sid
+        compact.set_sub(jp=jp)
         island._kick()
-    ctx.live.live_zh.connect(on_sub)
-    ctx.live.final_zh.connect(on_sub)
+
+    def on_zh(sid, zh):
+        if zh:
+            compact.set_sub(zh=zh)
+            island._kick()
+
+    def on_running(on):
+        compact.set_sub_running(on)
+        island._kick()
+    ctx.live.partial.connect(on_partial)
+    ctx.live.segment.connect(on_segment)
+    ctx.live.live_zh.connect(on_zh)
+    ctx.live.final_zh.connect(on_zh)
+    ctx.live.running_changed.connect(on_running)
+    island.play_pause_requested.connect(lambda: ctx.media.play_pause())
     ctx.learn.notice.connect(lambda t: island.activity({"glyph": _G().CHECK, "title": t}, 2.6))
     ctx.live.error.connect(lambda m: island.activity({"glyph": G.LIVE, "title": "实时字幕", "sub": m}, 4))
 
