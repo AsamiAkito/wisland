@@ -339,8 +339,11 @@ def main():
     home.a_pt.clicked.connect(lambda: island.set_passthrough(not island.passthrough()))
 
     def on_mode(mode):
+        # 按钮只表示 常驻展开 / 悬停展开；长关不在按钮上显示
+        if mode == "never":
+            mode = "hover"
         g, label = MODE_UI.get(mode, MODE_UI["hover"])
-        home.a_pin.set_on(mode != "hover", g, label)
+        home.a_pin.set_on(mode == "always", g, label)
 
     def on_pt(on):
         home.a_pt.set_on(on, None, "可穿透")

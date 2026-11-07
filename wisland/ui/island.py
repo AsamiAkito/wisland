@@ -1127,9 +1127,11 @@ class Island(QtWidgets.QWidget):
         """双击：悬停展开 ↔ 长关（常驻展开时双击也切到长关）。"""
         new = "hover" if self.expand_mode() == "never" else "never"
         self.set_expand_mode(new)
-        if not self.expanded:
-            self.activity({"glyph": G.EYE_OFF if new == "never" else G.EYE,
-                           "title": "长关" if new == "never" else "悬停展开"}, 1.6)
+        if new == "never" and self.expanded:
+            # 双击长关：立即收起，不等鼠标移出；也不显示任何提示文字
+            self.locks.discard("pin")
+            self.release_focus()
+            self.collapse()
 
     def _long_press(self):
         pass
