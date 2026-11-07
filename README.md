@@ -1,4 +1,4 @@
-# wisland · Windows 液态毛玻璃灵动岛
+# Wisland · Windows 液态灵动岛
 
 贴在屏幕边缘的液态毛玻璃胶囊，悬停弹性展开。
 
