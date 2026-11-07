@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""股票（本地盯盘后端）与天气（OpenWeather）。"""
+"""股票（腾讯财经公开行情）与天气（Open-Meteo / OpenWeather）。"""
 from __future__ import annotations
 
 import datetime as dt
@@ -25,6 +25,7 @@ def _pct_color(pct):
 
 class StockList(QtWidgets.QWidget, Themed):
     picked = QtCore.Signal(dict)
+    menu_requested = QtCore.Signal(dict)
     ROW = 36
 
     def __init__(self, parent=None):
@@ -53,6 +54,10 @@ class StockList(QtWidgets.QWidget, Themed):
 
     def mouseReleaseEvent(self, e):
         i = int(e.position().y() // self.ROW)
+        if e.button() == Qt.MouseButton.RightButton:
+            if 0 <= i < len(self.rows):
+                self.menu_requested.emit(self.rows[i])
+            return
         if 0 <= i < len(self.rows):
             self.sel = self.rows[i].get("code")
             self.picked.emit(self.rows[i])
@@ -63,7 +68,7 @@ class StockList(QtWidgets.QWidget, Themed):
         if not self.rows:
             p.setFont(ui_font(12))
             p.setPen(theme.text3())
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "自选为空")
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "自选为空，点右上角 + 添加")
             return
         w = self.width()
         for i, s in enumerate(self.rows):
@@ -108,6 +113,15 @@ class StocksPage(Page):
         self.seg.setFixedWidth(180)
         self.seg.changed.connect(self._market)
         self.status = Label("", 11.5, level=3, align=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.add_btn = IconButton(G.ADD, 28, 12, "添加自选（代码 / 名称 / 拼音）")
+        self.add_btn.clicked.connect(self._start_add)
+        self.add_edit = LineEdit("代码 / 名称 / 拼音，回车搜索")
+        self.add_edit.setFixedWidth(220)
+        self.add_edit.setFixedHeight(30)
+        self.add_edit.hide()
+        self.add_edit.focus_wanted.connect(self.want_focus)
+        self.add_edit.returnPressed.connect(self._do_search)
+        self.add_edit.installEventFilter(self)
         # 分时卡片
         self.detail = Card(radius=16)
         self.d_name = Label("", 13, W.DemiBold)
@@ -118,6 +132,7 @@ class StocksPage(Page):
         self.detail.hide()
         self.list = StockList()
         self.list.picked.connect(self._pick)
+        self.list.menu_requested.connect(self._row_menu)
         sc = ScrollArea()
         lay = QtWidgets.QVBoxLayout(sc.inner)
         lay.setContentsMargins(0, 0, 4, 0)
@@ -125,7 +140,8 @@ class StocksPage(Page):
         lay.addStretch(1)
         self.err = Label("", 12, level=2, align=Qt.AlignmentFlag.AlignCenter)
         self.err.hide()
-        self.setLayout(vbox(hbox(self.seg, None, self.status), self.detail, self.err, (sc, 1), spacing=8))
+        self.setLayout(vbox(hbox(self.seg, None, self.add_edit, self.status, self.add_btn, spacing=6),
+                            self.detail, self.err, (sc, 1), spacing=8))
 
     def _market(self, i):
         self.market = MARKETS[i][0]
@@ -142,6 +158,68 @@ class StocksPage(Page):
         code = s.get("code")
         prev = s.get("prev_close")
         self.ctx.stocks.minute(code, lambda pts, prev=prev: self._minute(code, pts, prev))
+
+    # ---------- 添加 / 删除自选 ----------
+    def _start_add(self):
+        self.add_btn.hide()
+        self.status.hide()
+        self.add_edit.clear()
+        self.add_edit.show()
+        self.want_focus()
+        self.add_edit.setFocus()
+
+    def _end_add(self):
+        self.add_edit.hide()
+        self.add_btn.show()
+        self.status.show()
+        if self.island is not None:
+            self.island.release_focus()
+
+    def _do_search(self):
+        q = self.add_edit.text().strip()
+        if not q:
+            self._end_add()
+            return
+        self.ctx.stocks.search(q, self._results)
+
+    def _results(self, items):
+        from .system import styled_menu
+        self._end_add()
+        m = styled_menu(self)
+        if not items:
+            m.addAction("没有找到匹配的股票").setEnabled(False)
+        for it in items[:10]:
+            a = m.addAction(f"{it['name']}    {it['code']}")
+            a.triggered.connect(lambda _=False, c=it["code"]: self._add(c))
+        if self.island:
+            self.island.locks.add("menu")
+            m.aboutToHide.connect(lambda: self.island.locks.discard("menu"))
+        m.popup(QtGui.QCursor.pos())
+
+    def _add(self, code):
+        from ...services.stocks import market_of
+        self.ctx.stocks.add(code)
+        i = [k for k, _ in MARKETS].index(market_of(code))
+        self.seg.set_index(i)
+        self._market(i)
+
+    def _row_menu(self, row):
+        from .system import styled_menu
+        m = styled_menu(self)
+        m.addAction(f"从自选删除 {row.get('name') or row.get('code')}").triggered.connect(
+            lambda: self.ctx.stocks.remove(row.get("code", "")))
+        if self.island:
+            self.island.locks.add("menu")
+            m.aboutToHide.connect(lambda: self.island.locks.discard("menu"))
+        m.popup(QtGui.QCursor.pos())
+
+    def eventFilter(self, obj, ev):
+        if obj is self.add_edit and ev.type() == QtCore.QEvent.Type.KeyPress and ev.key() == Qt.Key.Key_Escape:
+            self._end_add()
+            return True
+        if obj is self.add_edit and ev.type() == QtCore.QEvent.Type.FocusOut and not self.add_edit.text().strip():
+            self._end_add()
+        return False
 
     def _minute(self, code, pts, prev):
         if self.list.sel != code:

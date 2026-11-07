@@ -61,17 +61,15 @@ DEFAULTS: dict = {
         },
     },
     "stocks": {
-        "server": "http://127.0.0.1:8321",
-        "markets": ["a", "hk", "us"],
+        # 自选（腾讯财经代码：sh/sz/bj + 6 位，hk + 5 位，us + 代码）；也可在股票页点 + 搜索添加、右键删除
+        "watchlist": ["sh000001", "sz399001", "sz399006", "hk00700", "usAAPL", "usNVDA", "usQQQ"],
         "interval": 5,
         "pct_alert": 3.0,            # 涨跌幅绝对值超过它时提醒（每只每天每个方向一次）
         "alerts": {},                # {"sh688256": {"above": 1500, "below": 1200}}
-        "ticker": [],                # 收起状态轮播显示的代码，空 = 不轮播
-        "autostart": "",             # 行情后端没运行时自动执行的启动脚本（可选）
     },
     "weather": {
-        "api_key": "",
-        "city": "Shanghai",
+        "api_key": "",         # 留空 = 使用 Open-Meteo（免费、无需 Key）；填 OpenWeather Key 则改用 OpenWeather
+        "city": "上海",
         "lat": None,
         "lon": None,
         "units": "metric",

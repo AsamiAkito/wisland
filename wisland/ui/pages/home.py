@@ -260,8 +260,7 @@ class MediaCard(Card):
         self.prog.set_state(m)
         self.prog.setVisible(True)
         self.prog.setEnabled(has and (m.get("duration") or 0) > 0)
-        for b in (self.prev, self.next, self.play):
-            b.setEnabled(has)
+        # 按钮始终可用：没有媒体会话（播放器没接入系统媒体控件）时会改发键盘媒体键
 
         if m.get("playing"):
             self._tick.start()
@@ -403,7 +402,8 @@ class PetWidget(QtWidgets.QWidget):
         self.face = PetFace()
         self.scale = scale
         self.setMinimumWidth(round(64 * scale))
-        self._t = QtCore.QTimer(self, interval=33, timeout=self.update)
+        self._t = QtCore.QTimer(self, interval=16, timeout=self.update)
+        self._t.setTimerType(Qt.TimerType.PreciseTimer)
         theme.changed.connect(self.update)
 
     def showEvent(self, e):

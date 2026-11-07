@@ -30,7 +30,7 @@ def main() -> int:
         try:
             from huggingface_hub import snapshot_download
         except ImportError:
-            print("请先安装：uv pip install --python .venv/Scripts/python.exe huggingface-hub")
+            print("缺少依赖 huggingface-hub，请先运行 setup.bat")
             return 1
         print("下载 Parakeet 日语模型 …")
         snapshot_download(PARAKEET_REPO, local_dir=str(dest), allow_patterns=["*.onnx", "tokens.txt"])

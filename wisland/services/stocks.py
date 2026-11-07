@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
-"""自选股行情：轮询本地盯盘后端（Flask，默认 8321 端口）。
+"""自选股行情：直接请求腾讯财经公开行情接口（无需 Key、无需后端）。
+
+自选列表在 config.json → stocks.watchlist（如 ["sh000001", "hk00700", "usAAPL"]），也可在股票页点 + 搜索添加、右键删除。
 
 信号
   updated(dict)  {markets: {'a': [quote...], 'hk': [...], 'us': [...]}, status: {'a': '交易中', ...},
@@ -14,7 +16,6 @@ import datetime as _dt
 import json
 import math
 import os
-import threading
 import time
 from typing import Callable
 
@@ -22,12 +23,65 @@ import httpx
 from PySide6 import QtCore
 
 from wisland.core.bg import run_bg, ui
-from wisland.core.config import DATA_DIR, cfg, expand
+from wisland.core.config import DATA_DIR, cfg
 
 CN_TZ = _dt.timezone(_dt.timedelta(hours=8))  # 中国无夏令时，固定 UTC+8
 ALERT_PATH = DATA_DIR / "stock_alerts.json"
-WATCHLIST_REFRESH_S = 60
 IDLE_INTERVAL_S = 60
+QUOTE_URL = "https://qt.gtimg.cn/q="
+MINUTE_URL = "https://web.ifzq.gtimg.cn/appstock/app"
+SEARCH_URL = "https://smartbox.gtimg.cn/s3/"
+DEFAULT_WATCHLIST = ["sh000001", "sz399001", "sz399006", "hk00700", "usAAPL", "usNVDA", "usQQQ"]
+
+
+def norm_code(code: str) -> str:
+    """规范化代码：SH600519 -> sh600519；usAAPL.OQ -> usAAPL。"""
+    c = (code or "").strip()
+    if len(c) > 2 and c[:2].lower() in ("sh", "sz", "bj", "hk", "us"):
+        c = c[:2].lower() + c[2:]
+    if c.startswith("us"):
+        c = "us" + c[2:].split(".")[0].upper()
+    return c
+
+
+def _f(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_quotes(text: str) -> dict:
+    """解析 qt.gtimg.cn：v_sh600519="1~名称~代码~现价~昨收~今开~...~时间~涨跌~涨跌幅~最高~最低~..." """
+    out = {}
+    for line in text.split(";"):
+        line = line.strip()
+        if not line.startswith("v_") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        f = val.strip().strip('"').split("~")
+        if len(f) < 35:
+            continue
+        out[key[2:].lower()] = {"name": f[1], "price": _f(f[3]), "prev_close": _f(f[4]), "open": _f(f[5]),
+                                "chg": _f(f[31]), "pct": _f(f[32]), "high": _f(f[33]), "low": _f(f[34]),
+                                "time": f[30], "sym": f[2]}
+    return out
+
+
+def parse_search(text: str) -> list[dict]:
+    """解析 smartbox：v_hint="sh~600519~贵州茅台~gzmt~GP-A^hk~00700~..." """
+    body = text.partition("=")[2].strip().strip(";").strip('"')
+    try:
+        body = body.encode("latin-1").decode("unicode_escape")
+    except Exception:  # noqa: BLE001
+        pass
+    out = []
+    for item in body.split("^"):
+        f = item.split("~")
+        if len(f) < 3 or f[0] not in ("sh", "sz", "bj", "hk", "us"):
+            continue
+        out.append({"code": norm_code(f[0] + f[1]), "name": f[2]})
+    return out
 
 
 def _cn_now() -> _dt.datetime:
@@ -106,12 +160,8 @@ class StockService(QtCore.QObject):
         super().__init__(parent)
         ui(lambda: None)  # 确保 bg 回调 invoker 在主线程创建
         self._client = httpx.Client(timeout=httpx.Timeout(6.0, connect=2.0), trust_env=False)
-        self._lock = threading.Lock()
-        self._watch: dict[str, list[dict]] = {}
-        self._watch_t = 0.0
         self._busy = False
         self._running = False
-        self._autostarted = False
         self._fail_count = 0
         self.last: dict = {}
         self._alerts = self._load_alerts()
@@ -129,21 +179,45 @@ class StockService(QtCore.QObject):
         self._timer.stop()
 
     def refresh(self):
-        """立即刷新（并重新读取自选列表）。"""
-        self._watch_t = 0
+        """立即刷新。"""
         if not self._busy:
             self._timer.stop()
             self._tick()
 
-    @property
-    def server(self) -> str:
-        return str(cfg.get("stocks.server") or "http://127.0.0.1:8321").rstrip("/")
+    # ---------- 自选列表（config.json → stocks.watchlist） ----------
+    @staticmethod
+    def watchlist() -> list[str]:
+        wl = cfg.get("stocks.watchlist")
+        if not isinstance(wl, list):
+            wl = list(DEFAULT_WATCHLIST)
+        return [norm_code(c) for c in wl if isinstance(c, str) and c.strip()]
+
+    def add(self, code: str):
+        code = norm_code(code)
+        wl = self.watchlist()
+        if code and code.lower() not in [c.lower() for c in wl]:
+            wl.append(code)
+            cfg.set("stocks.watchlist", wl)
+            self.refresh()
+
+    def remove(self, code: str):
+        wl = [c for c in self.watchlist() if c.lower() != norm_code(code).lower()]
+        cfg.set("stocks.watchlist", wl)
+        self.refresh()
+
+    def search(self, query: str, cb: Callable[[list], None]):
+        """按名称 / 拼音 / 代码搜索 -> cb([{code, name}])（主线程回调）。"""
+        def work():
+            r = self._client.get(SEARCH_URL, params={"v": 2, "q": query, "t": "all"})
+            r.raise_for_status()
+            return parse_search(r.text)
+        run_bg(work, on_done=cb, on_error=lambda e: cb([]))
 
     # ---------- polling ----------
     def _schedule(self):
         if not self._running:
             return
-        markets = cfg.get("stocks.markets") or ["a", "hk", "us"]
+        markets = {market_of(c) for c in self.watchlist()} or {"a"}
         active = any(market_status(m) in ("交易中", "集合竞价") for m in markets)
         try:
             iv = float(cfg.get("stocks.interval") or 5)
@@ -151,51 +225,29 @@ class StockService(QtCore.QObject):
             iv = 5.0
         sec = max(2.0, iv) if active else IDLE_INTERVAL_S
         if not self.last.get("ok"):
-            sec = min(sec, 10.0)  # 后端没起来时 10 秒重试
+            sec = min(sec, 15.0)  # 网络失败时 15 秒重试
         self._timer.start(int(sec * 1000))
 
     def _tick(self):
         if self._busy or not self._running:
             return
         self._busy = True
-        run_bg(self._fetch, on_done=self._on_data, on_error=self._on_err)
+        run_bg(self._fetch, self.watchlist(), on_done=self._on_data, on_error=self._on_err)
 
-    def _get(self, path: str, **params):
-        r = self._client.get(self.server + path, params=params)
-        r.raise_for_status()
-        return r.json()
-
-    def _fetch(self) -> dict:
-        markets = list(cfg.get("stocks.markets") or ["a", "hk", "us"])
-        now = time.time()
-        if not self._watch or now - self._watch_t > WATCHLIST_REFRESH_S:
-            watch = {}
-            for m in markets:
-                wl = self._get("/api/watchlist", market=m)
-                watch[m] = [{"code": s.get("code", ""), "name": s.get("name", "")} for s in wl if s.get("code")]
-            self._watch, self._watch_t = watch, now
-        codes = [s["code"] for m in markets for s in self._watch.get(m, [])]
-        quotes = {}
-        # 分批，避免 URL 过长
-        for i in range(0, len(codes), 60):
-            q = self._get("/api/quote", codes=",".join(codes[i:i + 60])) or {}
-            quotes.update(q)
-        qmap = {k.lower(): v for k, v in quotes.items()}
-        out = {}
-        for m in markets:
-            rows = []
-            for s in self._watch.get(m, []):
-                q = qmap.get(s["code"].lower())
-                if q:
-                    row = {k: q.get(k) for k in ("code", "name", "price", "pct", "chg", "prev_close",
-                                                 "open", "high", "low", "time")}
-                    row["code"] = s["code"]
-                    row["name"] = q.get("name") or s["name"]
-                else:
-                    row = {"code": s["code"], "name": s["name"], "price": None, "pct": None, "chg": None}
-                rows.append(row)
-            out[m] = rows
-        return {"markets": out, "status": {m: market_status(m) for m in markets},
+    def _fetch(self, codes: list[str]) -> dict:
+        quotes: dict[str, dict] = {}
+        for i in range(0, len(codes), 50):
+            part = codes[i:i + 50]
+            r = self._client.get(QUOTE_URL + ",".join(part))
+            r.raise_for_status()
+            quotes.update(parse_quotes(r.content.decode("gbk", "replace")))
+        out: dict[str, list[dict]] = {"a": [], "hk": [], "us": []}
+        for c in codes:
+            q = quotes.get(c.lower())
+            row = dict(q) if q else {"name": c, "price": None, "pct": None, "chg": None}
+            row["code"] = c
+            out[market_of(c)].append(row)
+        return {"markets": out, "status": {m: market_status(m) for m in out},
                 "time": time.time(), "ok": True, "error": ""}
 
     def _on_data(self, data: dict):
@@ -213,19 +265,7 @@ class StockService(QtCore.QObject):
     def _on_err(self, e: Exception):
         self._busy = False
         self._fail_count += 1
-        unreachable = isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout))
-        msg = "盯盘后端未启动" if unreachable else f"行情获取失败：{str(e)[:80]}"
-        if unreachable and not self._autostarted:
-            self._autostarted = True
-            vbs = expand(cfg.get("stocks.autostart") or "")
-            if vbs and os.path.exists(vbs):
-                msg = "正在启动盯盘后端…"
-                try:
-                    import subprocess
-                    subprocess.Popen(["wscript.exe", vbs], cwd=os.path.dirname(vbs),
-                                     creationflags=0x08000000)
-                except Exception:  # noqa: BLE001
-                    pass
+        msg = "网络连接失败" if isinstance(e, httpx.TransportError) else f"行情获取失败：{str(e)[:80]}"
         self.last = {"markets": self.last.get("markets", {}), "status": {}, "time": time.time(),
                      "ok": False, "error": msg}
         self.updated.emit(self.last)
@@ -235,8 +275,27 @@ class StockService(QtCore.QObject):
     def minute(self, code: str, cb: Callable[[list], None]):
         """异步取当日分时价格 -> cb(list[float])（主线程回调；失败给空列表）。"""
         def work():
-            j = self._get("/api/minute", code=code)
-            return [float(p["price"]) for p in (j.get("points") or []) if p.get("price") is not None]
+            m = market_of(code)
+            path = {"us": "UsMinute", "hk": "hkMinute"}.get(m, "minute")
+            key = norm_code(code)
+            if m == "us":       # 美股分时需要带交易所后缀（如 QQQ.OQ / BABA.N），从行情里取
+                r0 = self._client.get(QUOTE_URL + key)
+                sym = (parse_quotes(r0.content.decode("gbk", "replace")).get(key.lower()) or {}).get("sym") or ""
+                key = "us" + sym if "." in sym else key + ".OQ"
+            r = self._client.get(f"{MINUTE_URL}/{path}/query", params={"code": key})
+            r.raise_for_status()
+            data = r.json().get("data") or {}
+            block = next(iter(data.values()), {}) if isinstance(data, dict) and data else {}
+            rows = ((block.get("data") or {}).get("data")) or []
+            pts = []
+            for line in rows:
+                parts = str(line).split()
+                if len(parts) >= 2:
+                    try:
+                        pts.append(float(parts[1]))
+                    except ValueError:
+                        pass
+            return pts
         run_bg(work, on_done=cb, on_error=lambda e: cb([]))
 
     # ---------- alerts ----------

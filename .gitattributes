@@ -1,0 +1,4 @@
+*.bat text eol=crlf
+*.vbs binary
+*.py text eol=lf
+*.txt text eol=lf

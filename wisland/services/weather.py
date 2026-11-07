@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""天气：OpenWeatherMap 免费接口（当前天气 + 5 天/3 小时预报）。
+"""天气：默认用 Open-Meteo（免费、无需 Key）；填了 weather.api_key 则改用 OpenWeatherMap。
 
 信号 updated(dict):
   {ok, error, city, temp, feels_like, desc, icon('10d'), humidity, wind, sunrise, sunset(epoch),
@@ -29,6 +29,60 @@ from wisland.core.bg import run_bg, ui
 from wisland.core.config import cfg
 
 API = "https://api.openweathermap.org/data/2.5"
+OM_API = "https://api.open-meteo.com/v1/forecast"
+OM_GEO = "https://geocoding-api.open-meteo.com/v1/search"
+
+# WMO 天气代码 -> (中文描述, OpenWeather 图标前缀)；图标前缀复用现有的字形映射
+_WMO = {
+    0: ("晴", "01"), 1: ("晴间多云", "02"), 2: ("多云", "03"), 3: ("阴", "04"),
+    45: ("雾", "50"), 48: ("雾凇", "50"),
+    51: ("小毛毛雨", "09"), 53: ("毛毛雨", "09"), 55: ("大毛毛雨", "09"), 56: ("冻毛毛雨", "09"), 57: ("冻毛毛雨", "09"),
+    61: ("小雨", "10"), 63: ("中雨", "10"), 65: ("大雨", "10"), 66: ("冻雨", "13"), 67: ("冻雨", "13"),
+    71: ("小雪", "13"), 73: ("中雪", "13"), 75: ("大雪", "13"), 77: ("雪粒", "13"),
+    80: ("阵雨", "09"), 81: ("阵雨", "09"), 82: ("强阵雨", "09"), 85: ("阵雪", "13"), 86: ("强阵雪", "13"),
+    95: ("雷暴", "11"), 96: ("雷暴伴冰雹", "11"), 99: ("雷暴伴冰雹", "11"),
+}
+
+
+def _wmo(code, day=True) -> tuple[str, str]:
+    desc, base = _WMO.get(int(code or 0), ("", "03"))
+    return desc, base + ("d" if day else "n")
+
+
+def parse_open_meteo(j: dict) -> dict:
+    """Open-Meteo /v1/forecast（timeformat=unixtime）-> 与 parse() 相同结构。"""
+    cur = j.get("current") or {}
+    daily = j.get("daily") or {}
+    hourly = j.get("hourly") or {}
+    tz_off = int(j.get("utc_offset_seconds") or 0)
+    desc, icon = _wmo(cur.get("weather_code"), bool(cur.get("is_day", 1)))
+    d0 = lambda k: (daily.get(k) or [None])[0]  # noqa: E731
+    out = {
+        "ok": True, "error": "", "city": "",
+        "temp": cur.get("temperature_2m"), "feels_like": cur.get("apparent_temperature"),
+        "desc": desc, "icon": icon, "humidity": cur.get("relative_humidity_2m"),
+        "wind": cur.get("wind_speed_10m"), "wind_deg": cur.get("wind_direction_10m"),
+        "sunrise": d0("sunrise"), "sunset": d0("sunset"),
+        "pressure": cur.get("pressure_msl"), "visibility": cur.get("visibility"),
+        "clouds": cur.get("cloud_cover"),
+        "temp_min": d0("temperature_2m_min"), "temp_max": d0("temperature_2m_max"),
+        "tz_offset": tz_off, "hourly": [], "daily": [], "time": time.time(),
+    }
+    now = time.time()
+    times = hourly.get("time") or []
+    start = next((i for i, t in enumerate(times) if t >= now - 1800), 0)
+    for i in range(start + 1, min(len(times), start + 1 + 24), 3):        # 从下一个整点起，3 小时一格
+        hd, hicon = _wmo((hourly.get("weather_code") or [0])[i], bool((hourly.get("is_day") or [1] * len(times))[i]))
+        pop = (hourly.get("precipitation_probability") or [0] * len(times))[i] or 0
+        out["hourly"].append({"time": times[i], "temp": (hourly.get("temperature_2m") or [None])[i],
+                              "icon": hicon, "pop": float(pop) / 100.0})
+    tz = timezone(timedelta(seconds=tz_off))
+    for i, t in enumerate((daily.get("time") or [])[:5]):
+        _, dicon = _wmo((daily.get("weather_code") or [0])[i], True)
+        out["daily"].append({"date": datetime.fromtimestamp(int(t), tz).strftime("%Y-%m-%d"),
+                             "min": (daily.get("temperature_2m_min") or [None])[i],
+                             "max": (daily.get("temperature_2m_max") or [None])[i], "icon": dicon})
+    return out
 NO_KEY_MSG = "未设置 OpenWeather API Key（config.json → weather.api_key）"
 
 FLUENT_FONT = "Segoe Fluent Icons"
@@ -204,11 +258,13 @@ class WeatherService(QtCore.QObject):
     def add_city(self, query: str):
         query = (query or "").strip()
         key = str(cfg.get("weather.api_key") or "").strip()
-        if not query or not key:
-            self.city_added.emit(False, "请输入城市名" if key else NO_KEY_MSG)
+        if not query:
+            self.city_added.emit(False, "请输入城市名")
             return
 
         def geo():
+            if not key:
+                return self._geocode(query)
             r = self._client.get("https://api.openweathermap.org/geo/1.0/direct",
                                  params={"q": query, "limit": 1, "appid": key})
             r.raise_for_status()
@@ -247,11 +303,7 @@ class WeatherService(QtCore.QObject):
         if self._busy:
             self._again = True
             return
-        key = str(cfg.get("weather.api_key") or "").strip()
-        if not key:
-            self._emit_first({"ok": False, "error": NO_KEY_MSG})
-            self.cities_updated.emit([])
-            return
+        key = str(cfg.get("weather.api_key") or "").strip()      # 空 = 用 Open-Meteo
         self._busy = True
         run_bg(self._fetch_all, key, self.cities(), on_done=self._done, on_error=self._fail)
 
@@ -263,7 +315,39 @@ class WeatherService(QtCore.QObject):
             p["q"] = c.get("q") or c.get("name")
         return p
 
+    def _geocode(self, name: str) -> dict | None:
+        """Open-Meteo 地理编码（支持中文城市名）-> {lat, lon, country} 或 None。"""
+        r = self._client.get(OM_GEO, params={"name": name, "count": 1, "language": "zh", "format": "json"})
+        r.raise_for_status()
+        res = (r.json().get("results") or [])
+        if not res:
+            return None
+        g = res[0]
+        return {"lat": g["latitude"], "lon": g["longitude"], "country": g.get("country_code", "")}
+
+    def _fetch_open_meteo(self, c: dict) -> dict:
+        lat, lon = c.get("lat"), c.get("lon")
+        if lat in (None, "") or lon in (None, ""):
+            g = self._geocode(c.get("q") or c.get("name") or "Shanghai")
+            if not g:
+                raise ValueError(f"找不到城市：{c.get('name')}")
+            lat, lon = g["lat"], g["lon"]
+        r = self._client.get(OM_API, params={
+            "latitude": lat, "longitude": lon, "timezone": "auto", "timeformat": "unixtime",
+            "wind_speed_unit": "ms", "forecast_days": 6,
+            "current": "temperature_2m,relative_humidity_2m,apparent_temperature,is_day,weather_code,"
+                       "cloud_cover,pressure_msl,wind_speed_10m,wind_direction_10m,visibility",
+            "hourly": "temperature_2m,weather_code,precipitation_probability,is_day",
+            "daily": "weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset",
+        })
+        r.raise_for_status()
+        d = parse_open_meteo(r.json())
+        d["name"] = d["city"] = c.get("name") or ""
+        return d
+
     def _fetch_one(self, key: str, c: dict) -> dict:
+        if not key:
+            return self._fetch_open_meteo(c)
         p = self._params(key, c)
         r = self._client.get(API + "/weather", params=p)
         r.raise_for_status()
@@ -329,6 +413,8 @@ class WeatherService(QtCore.QObject):
             return "天气请求超时"
         if isinstance(e, httpx.TransportError):
             return "无法连接天气服务"
+        if isinstance(e, ValueError) and str(e):
+            return str(e)
         return f"天气解析失败：{str(e)[:60]}"
 
     def _emit_first(self, d: dict):

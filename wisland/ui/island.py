@@ -646,8 +646,8 @@ class Island(QtWidgets.QWidget):
             self.timer.stop()
             self.timer.setInterval(16)
         elif self.mode == "anchored" and self.sw.rest and self.sh.rest and not self.expanded:
-            # 只有常态动画：播放时 30fps（律动），空闲时 20fps
-            self.timer.setInterval(33 if self.compact.busy() else 50)
+            # 只有常态动画：表情 / 音乐律动 / 提醒时 60fps，空闲（只有圆角呼吸）时 30fps
+            self.timer.setInterval(16 if self.compact.busy() else 33)
         else:
             self.timer.setInterval(16)
 

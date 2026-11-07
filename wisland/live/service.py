@@ -62,7 +62,7 @@ class LiveService(QtCore.QObject):
     def available(self) -> tuple[bool, str]:
         from .paths import MODELS
         if not (MODELS / "parakeet-ja-0.6b-int8").exists() or not (MODELS / "silero_vad.onnx").exists():
-            return False, f"缺少识别模型：{MODELS}"
+            return False, "缺少识别模型，先运行 scripts/download_models.py 下载（约 630MB）"
         return True, ""
 
     def toggle(self):

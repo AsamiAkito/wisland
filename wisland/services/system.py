@@ -42,6 +42,10 @@ try:
 except Exception:  # noqa: BLE001
     traceback.print_exc()
     _Radio = None
+try:
+    from winrt.windows.devices.bluetooth import BluetoothAdapter as _BtAdapter
+except Exception:  # noqa: BLE001
+    _BtAdapter = None
 
 
 class RadioService(QtCore.QObject):
@@ -119,7 +123,17 @@ class RadioService(QtCore.QObject):
             except Exception:  # noqa: BLE001
                 traceback.print_exc()
                 self._access = _RAS.UNSPECIFIED
-        return list(await _Radio.get_radios_async() or [])
+        radios = list(await _Radio.get_radios_async() or [])
+        # 部分电脑上 Radio.GetRadiosAsync 不返回蓝牙（驱动 / 权限原因），改从默认蓝牙适配器取
+        if _BtAdapter is not None and not any(int(r.kind) == int(_RK.BLUETOOTH) for r in radios):
+            try:
+                ad = await _BtAdapter.get_default_async()
+                r = await ad.get_radio_async() if ad is not None else None
+                if r is not None:
+                    radios.append(r)
+            except Exception:  # noqa: BLE001
+                pass
+        return radios
 
     async def _poll(self):
         st = dict(self.state)

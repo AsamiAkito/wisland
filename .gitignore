@@ -14,3 +14,6 @@ scratch/
 # 译声原项目、模型、字典（体积大，本地使用）
 translator/
 models/
+
+# 宣传视频素材与输出
+promo/

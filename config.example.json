@@ -7,12 +7,14 @@
     "hide_fullscreen": false,
     "hover_expand_ms": 120,
     "collapse_delay_ms": 320,
-    "exclude_from_capture": true,
+    "exclude_from_capture": false,
     "blur_fps": 8,
     "scale": 1.0,
     "default_tab": "home",
+    "expand_mode": "hover",
     "pinned": false,
     "compact_view": "clock",
+    "auto_cycle_s": 30,
     "passthrough": false
   },
   "hotkeys": {
@@ -70,21 +72,22 @@
     }
   },
   "stocks": {
-    "server": "http://127.0.0.1:8321",
-    "markets": [
-      "a",
-      "hk",
-      "us"
+    "watchlist": [
+      "sh000001",
+      "sz399001",
+      "sz399006",
+      "hk00700",
+      "usAAPL",
+      "usNVDA",
+      "usQQQ"
     ],
     "interval": 5,
     "pct_alert": 3.0,
-    "alerts": {},
-    "ticker": [],
-    "autostart": ""
+    "alerts": {}
   },
   "weather": {
     "api_key": "",
-    "city": "Shanghai",
+    "city": "上海",
     "lat": null,
     "lon": null,
     "units": "metric",
@@ -146,6 +149,14 @@
       "live_min_new_chars": 4,
       "context_lines": 3
     }
+  },
+  "learn": {
+    "deck": "日语::生词",
+    "ankiconnect_url": "",
+    "auto_sync": false,
+    "screenshot": false,
+    "player_title": "",
+    "source": ""
   },
   "clipboard": {
     "max": 10

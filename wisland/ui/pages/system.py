@@ -85,8 +85,8 @@ class ControlsPage(Page):
         self.tun = Tile(G.BOLT, "TUN 模式")
         self._radio = {}
         self._clash = {}
-        self.wifi.clicked.connect(lambda: ctx.radio.set_wifi(not self._radio.get("wifi_on")))
-        self.bt.clicked.connect(lambda: ctx.radio.set_bluetooth(not self._radio.get("bt_on")))
+        self.wifi.clicked.connect(lambda: self._toggle("wifi"))
+        self.bt.clicked.connect(lambda: self._toggle("bt"))
         self.proxy.clicked.connect(lambda: ctx.clash.set_sysproxy(not self._clash.get("sysproxy")))
         self.tun.clicked.connect(lambda: ctx.clash.set_tun(not self._clash.get("tun")))
         grid = QtWidgets.QGridLayout()
@@ -109,10 +109,25 @@ class ControlsPage(Page):
         self.card.setLayout(vbox(hbox(self.clash_state, None, self.speed, openv, spacing=6),
                                  hbox(self.mode, None, self.node, spacing=8), spacing=6, margins=(14, 10, 10, 10)))
         left = vbox(self.vol, self.bri, self.card, None, spacing=8)
+        for w in (self.card, self.proxy, self.tun):
+            w.hide()
         gw = QtWidgets.QWidget()
         gw.setLayout(grid)
         gw.setFixedWidth(270)
         self.setLayout(hbox((left, 1), vbox(None, gw, None), spacing=10))
+
+    def _toggle(self, kind: str):
+        """可用就切换开关；检测不到（台式机没蓝牙 / 驱动不支持）时打开对应的系统设置页。"""
+        import os
+        if not self._radio.get(f"{kind}_available", False):
+            os.startfile("ms-settings:" + ("bluetooth" if kind == "bt" else "network-wifi"))  # noqa: S606
+            if self.island:
+                self.island.collapse()
+            return
+        if kind == "bt":
+            self.ctx.radio.set_bluetooth(not self._radio.get("bt_on"))
+        else:
+            self.ctx.radio.set_wifi(not self._radio.get("wifi_on"))
 
     def _set_vol(self, v: float):
         a = self.ctx.audio
@@ -142,11 +157,16 @@ class ControlsPage(Page):
                             (d.get("wifi_ssid") or ("已开启" if d.get("wifi_on") else "已关闭"))
                             + (f" · {d['wifi_signal']}%" if d.get("wifi_signal") and d.get("wifi_ssid") else ""),
                             d.get("wifi_available", True))
-        self.bt.set_state(bool(d.get("bt_on")), "已开启" if d.get("bt_on") else "已关闭", d.get("bt_available", True))
+        bt_ok = d.get("bt_available", True)
+        self.bt.set_state(bool(d.get("bt_on")),
+                          ("已开启" if d.get("bt_on") else "已关闭") if bt_ok else "未检测到 · 点击打开设置", bt_ok)
 
     def set_clash(self, d: dict):
         self._clash = d
         ok = d.get("ok")
+        # 只有检测到 Clash Verge 在运行时才显示代理相关的卡片和磁贴（没装的用户看不到无用的面板）
+        for w in (self.card, self.proxy, self.tun):
+            w.setVisible(bool(ok))
         self.proxy.set_state(bool(d.get("sysproxy")), "127.0.0.1" if d.get("sysproxy") else "已关闭")
         self.tun.set_state(bool(d.get("tun")), "已开启" if d.get("tun") else "已关闭", bool(ok))
         if ok:

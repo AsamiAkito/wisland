@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import datetime as _dt
 import threading
 import time
@@ -25,6 +26,17 @@ except Exception:  # noqa: BLE001
     _Manager = None
 
 POLL_S = 0.7
+VK_MEDIA_NEXT, VK_MEDIA_PREV, VK_MEDIA_PLAY_PAUSE = 0xB0, 0xB1, 0xB3
+_user32 = ctypes.WinDLL("user32")
+
+
+def media_key(vk: int):
+    """模拟键盘媒体键：播放器没有接入系统媒体控件（SMTC）时也能控制大多数播放器。"""
+    try:
+        _user32.keybd_event(vk, 0, 0x1, 0)          # KEYEVENTF_EXTENDEDKEY
+        _user32.keybd_event(vk, 0, 0x1 | 0x2, 0)    # | KEYEVENTF_KEYUP
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
 _PLAYING = 4  # GlobalSystemMediaTransportControlsSessionPlaybackStatus.PLAYING
 
 _FRIENDLY = [
@@ -277,34 +289,41 @@ class MediaService(QtCore.QObject):
             return None
 
     # ---------------- 控制 ----------------
-    def _submit(self, make_coro):
+    def _submit(self, make_coro, fallback_vk: int | None = None):
+        """在媒体线程里对当前会话执行操作；没有会话 / 会话拒绝时改发键盘媒体键。"""
         loop = self._loop
-        if loop is None:
+        if loop is None or self._session is None:
+            if fallback_vk is not None:
+                media_key(fallback_vk)
             return
 
         async def wrapper():
+            ok = False
             try:
                 s = self._session
                 if s is not None:
-                    await make_coro(s)
+                    ok = bool(await make_coro(s))
                     await asyncio.sleep(0.15)
                     await self._poll()
             except Exception:  # noqa: BLE001
                 traceback.print_exc()
+            if not ok and fallback_vk is not None:
+                media_key(fallback_vk)
 
         try:
             asyncio.run_coroutine_threadsafe(wrapper(), loop)
         except RuntimeError:
-            pass
+            if fallback_vk is not None:
+                media_key(fallback_vk)
 
     def play_pause(self):
-        self._submit(lambda s: s.try_toggle_play_pause_async())
+        self._submit(lambda s: s.try_toggle_play_pause_async(), VK_MEDIA_PLAY_PAUSE)
 
     def next(self):
-        self._submit(lambda s: s.try_skip_next_async())
+        self._submit(lambda s: s.try_skip_next_async(), VK_MEDIA_NEXT)
 
     def prev(self):
-        self._submit(lambda s: s.try_skip_previous_async())
+        self._submit(lambda s: s.try_skip_previous_async(), VK_MEDIA_PREV)
 
     def seek(self, seconds: float):
         def go(s):
