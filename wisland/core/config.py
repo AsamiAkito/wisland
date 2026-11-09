@@ -5,12 +5,20 @@ from __future__ import annotations
 import copy
 import json
 import os
+import sys
 import threading
 from pathlib import Path
 
 from PySide6 import QtCore
 
-ROOT = Path(__file__).resolve().parents[2]
+def _app_root() -> Path:
+    """源码运行 = 仓库根目录；PyInstaller 打包后 = exe 所在目录（config.json / data 跟着 exe 走）。"""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[2]
+
+
+ROOT = _app_root()
 CONFIG_PATH = ROOT / "config.json"
 DATA_DIR = ROOT / "data"
 DATA_DIR.mkdir(exist_ok=True)
@@ -28,6 +36,7 @@ DEFAULTS: dict = {
         "blur_fps": 8,
         "scale": 1.0,
         "default_tab": "home",
+        "hidden_tabs": [],          # 隐藏的板块（标签页）：stock / weather / ctl / clip / trans
         "expand_mode": "hover",     # hover = 悬停展开 / always = 常驻展开 / never = 保持收起
         "pinned": False,            # 旧版"保持展开"（兼容）
         "compact_view": "clock",    # 收起态视图：clock / pet / music（滚轮切换）
@@ -46,11 +55,30 @@ DEFAULTS: dict = {
         "priority": ["cloudmusic", "bilibili", "chrome", "zen", "msedge", "firefox"],
     },
     "notify": {
-        # wpndatabase 中的 NotificationHandler.PrimaryId 前缀 -> 显示名 / 类型
+        # 消息页显示的模块：qq / wechat / mail / feishu / dingtalk（消息页点 + 可添加飞书、钉钉）
+        "modules": ["qq", "wechat", "mail"],
+        # 弹出提醒时显示正文预览的模块。只有把通知写进 Windows 通知中心的应用才有正文可读；
+        # 任务栏闪烁只能拿到应用名，没有内容。
+        "body_preview": ["feishu", "dingtalk"],
+        # wpndatabase 中的 NotificationHandler.PrimaryId 前缀 -> 显示名 / 类型（不区分大小写）
         "toast_apps": {
             "QQ": {"name": "QQ", "kind": "qq"},
-            "ThunderbirdToast": {"name": "邮件", "kind": "mail"},
             "Weixin": {"name": "微信", "kind": "wechat"},
+            "ThunderbirdToast": {"name": "邮件", "kind": "mail"},
+            # Windows「邮件」应用 / 新版 Outlook / 经典 Outlook：自动识别它们的系统通知
+            "microsoft.windowscommunicationsapps_8wekyb3d8bbwe!microsoft.windowslive.mail": {"name": "邮件", "kind": "mail"},
+            "Microsoft.OutlookForWindows": {"name": "邮件", "kind": "mail"},
+            "Microsoft.Outlook": {"name": "邮件", "kind": "mail"},
+            "Outlook": {"name": "邮件", "kind": "mail"},
+            # 飞书 / 钉钉（Electron 应用的通知 AUMID 可能因版本不同而变化，这里多列几种常见值）
+            "com.electron.Feishu": {"name": "飞书", "kind": "feishu"},
+            "electron.app.Feishu": {"name": "飞书", "kind": "feishu"},
+            "Feishu": {"name": "飞书", "kind": "feishu"},
+            "Lark": {"name": "飞书", "kind": "feishu"},
+            "electron.app.Lark": {"name": "飞书", "kind": "feishu"},
+            "DingTalk": {"name": "钉钉", "kind": "dingtalk"},
+            "electron.app.DingTalk": {"name": "钉钉", "kind": "dingtalk"},
+            "com.alibaba.dingtalk": {"name": "钉钉", "kind": "dingtalk"},
         },
         # 任务栏闪烁（FlashWindow）的进程 -> 显示名 / 类型
         "flash_processes": {
@@ -58,11 +86,19 @@ DEFAULTS: dict = {
             "wechat.exe": {"name": "微信", "kind": "wechat"},
             "qq.exe": {"name": "QQ", "kind": "qq"},
             "thunderbird.exe": {"name": "邮件", "kind": "mail"},
+            "hxoutlook.exe": {"name": "邮件", "kind": "mail"},      # Windows「邮件」
+            "olk.exe": {"name": "邮件", "kind": "mail"},            # 新版 Outlook
+            "outlook.exe": {"name": "邮件", "kind": "mail"},        # 经典 Outlook
+            "feishu.exe": {"name": "飞书", "kind": "feishu"},
+            "lark.exe": {"name": "飞书", "kind": "feishu"},
+            "dingtalk.exe": {"name": "钉钉", "kind": "dingtalk"},
         },
         "open": {
             "qq": "",          # 例：C:/Program Files/Tencent/QQNT/QQ.exe
             "wechat": "",      # 例：C:/Program Files/Tencent/Weixin/Weixin.exe
             "mail": "",        # 例：C:/Program Files/Mozilla Thunderbird/thunderbird.exe
+            "feishu": "",      # 留空时按进程名查找已打开的飞书窗口
+            "dingtalk": "",
         },
     },
     "stocks": {

@@ -17,6 +17,41 @@ from .base import Page
 
 Qt = QtCore.Qt
 
+# 消息页可用的模块；"+" 菜单按这个顺序列出还没有添加的模块
+MESSAGE_MODULES = {
+    "qq": ("QQ", G.CHAT),
+    "wechat": ("微信", G.MESSAGE),
+    "mail": ("邮件", G.MAIL),
+    "feishu": ("飞书", G.SEND),
+    "dingtalk": ("钉钉", G.CONTACT),
+}
+DEFAULT_MODULES = ["qq", "wechat", "mail"]
+
+
+def module_info(kind: str) -> tuple[str, str]:
+    """模块的显示名 / 图标；未知类型用通知映射里的显示名兜底。"""
+    if kind in MESSAGE_MODULES:
+        return MESSAGE_MODULES[kind]
+    for src in ("toast_apps", "flash_processes"):
+        mappings = cfg.get(f"notify.{src}") or {}
+        if not isinstance(mappings, dict):
+            continue
+        for m in mappings.values():
+            if isinstance(m, dict) and m.get("kind") == kind and m.get("name"):
+                return str(m["name"]), G.BELL
+    return kind, G.BELL
+
+
+def enabled_message_modules() -> list[str]:
+    """消息页启用的模块（config.json → notify.modules）。"""
+    v = cfg.get("notify.modules")
+    mods = v if isinstance(v, list) else DEFAULT_MODULES
+    out: list[str] = []
+    for k in mods:
+        if isinstance(k, str) and k not in out:
+            out.append(k)
+    return out
+
 
 # ======================================================================== 播放卡片
 class Progress(QtWidgets.QWidget, Themed):
@@ -510,7 +545,8 @@ class HomePage(Page):
         self.ctx.live.toggle()
         if self.ctx.live.running and self.island:
             self.ctx.pages["trans"].show_live()
-            self.island.show_page("trans")
+            if "trans" in self.island.nav.keys():
+                self.island.show_page("trans")
 
     def set_muted(self, muted: bool):
         self.a_mute.set_on(muted, G.MUTE if muted else G.VOLUME, "已静音" if muted else "静音")
@@ -593,7 +629,15 @@ class HistoryList(QtWidgets.QWidget, Themed):
             p.setPen(theme.text())
             p.drawText(QtCore.QRectF(24, y, 80, 30), Qt.AlignmentFlag.AlignVCenter, r.get("name", ""))
             kind = r.get("kind")
-            desc = "新邮件" if kind == "mail" else (f"{r['sender']} 发来消息" if r.get("sender") else "新消息")
+            body = r.get("body")
+            if body:
+                desc = f"{r['sender']}：{body}" if r.get("sender") else body
+            elif kind == "mail":
+                desc = "新邮件"
+            elif r.get("sender"):
+                desc = f"{r['sender']} 发来消息"
+            else:
+                desc = "新消息"
             p.setFont(ui_font(12.5))
             p.setPen(theme.text2())
             p.drawText(QtCore.QRectF(100, y, self.width() - 170, 30), Qt.AlignmentFlag.AlignVCenter,
@@ -609,23 +653,122 @@ class MessagesPage(Page):
 
     def __init__(self, ctx):
         super().__init__(ctx)
-        self.tiles = {
-            "qq": AppTile("qq", "QQ", G.CHAT),
-            "wechat": AppTile("wechat", "微信", G.MESSAGE),
-            "mail": AppTile("mail", "邮件", G.MAIL),
-        }
-        for k, t in self.tiles.items():
-            t.clicked.connect(lambda k=k: self._open(k))
+        self.tiles: dict[str, AppTile] = {}
+        self.tile_row = QtWidgets.QHBoxLayout()
+        self.tile_row.setSpacing(8)
+        self.tile_row.setContentsMargins(0, 0, 0, 0)
+        self.tile_box = QtWidgets.QWidget()
+        self.tile_box.setLayout(self.tile_row)
+        self.empty = Label("点右上角 + 添加消息模块", 12, level=3, align=Qt.AlignmentFlag.AlignCenter)
+        self.empty.setFixedHeight(84)
         self.hist = HistoryList()
         sc = ScrollArea()
         lay = QtWidgets.QVBoxLayout(sc.inner)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.hist)
         lay.addStretch(1)
+        self.add_btn = IconButton(G.ADD, 28, 12, "添加消息模块")
+        self.add_btn.clicked.connect(self._add_menu)
         clear = PillButton("全部已读", G.CHECK, height=26)
         clear.clicked.connect(self._clear_all)
-        head = hbox(None, clear)
-        self.setLayout(vbox(hbox(*self.tiles.values(), spacing=8), head, (sc, 1), spacing=8))
+        head = hbox(None, self.add_btn, clear)
+        self.setLayout(vbox(self.tile_box, self.empty, head, (sc, 1), spacing=8))
+        self._menu_watch = (self.hist, sc.inner, sc.viewport())
+        for w in self._menu_watch:
+            w.installEventFilter(self)
+        self._build_tiles()
+
+    def _build_tiles(self):
+        for t in list(self.tiles.values()):
+            self.tile_row.removeWidget(t)
+            t.setParent(None)
+            t.deleteLater()
+        self.tiles.clear()
+        for kind in enabled_message_modules():
+            name, glyph = module_info(kind)
+            t = AppTile(kind, name, glyph)
+            t.clicked.connect(lambda k=kind: self._open(k))
+            t.right_clicked.connect(lambda k=kind: self._tile_menu(k))
+            self.tile_row.addWidget(t)
+            self.tiles[kind] = t
+        self.empty.setVisible(not self.tiles)
+        self.refresh()
+
+    def sync_modules(self):
+        """配置重新加载后重建模块磁贴。"""
+        self._build_tiles()
+
+    def eventFilter(self, obj, ev):
+        # 右键信息 / 历史区域：清空消息（右键模块磁贴仍然由磁贴自己处理，用来移除模块）
+        if ev.type() == QtCore.QEvent.Type.ContextMenu and obj in self._menu_watch:
+            self._clear_menu(ev.globalPos())
+            return True
+        return False
+
+    def _clear_menu(self, pos):
+        from .system import styled_menu
+        m = styled_menu(self)
+        a = m.addAction("清空全部消息")
+        a.setEnabled(bool(self.ctx.notify.history) or any(self.ctx.notify.counts.values()))
+        a.triggered.connect(self._clear_messages)
+        if self.island:
+            self.island.locks.add("menu")
+            m.aboutToHide.connect(lambda: self.island.locks.discard("menu"))
+        m.popup(pos)
+
+    def _clear_messages(self):
+        """清空未读计数和历史消息。"""
+        self.ctx.notify.clear_all()
+        self.refresh()
+
+    def _add_menu(self):
+        from .system import styled_menu
+        m = styled_menu(self)
+        have = set(self.tiles)
+        avail = [k for k in MESSAGE_MODULES if k not in have]
+        if not avail:
+            m.addAction("所有模块都已添加").setEnabled(False)
+        for kind in avail:
+            a = m.addAction("添加 " + MESSAGE_MODULES[kind][0])
+            a.triggered.connect(lambda _=False, k=kind: self._add(k))
+        if self.island:
+            self.island.locks.add("menu")
+            m.aboutToHide.connect(lambda: self.island.locks.discard("menu"))
+        m.popup(QtGui.QCursor.pos())
+
+    def _tile_menu(self, kind):
+        from .system import styled_menu
+        m = styled_menu(self)
+        name = module_info(kind)[0]
+        clear = m.addAction(f"清空「{name}」消息")
+        clear.setEnabled(bool(self.ctx.notify.counts.get(kind)) or
+                         any(h.get("kind") == kind for h in self.ctx.notify.history))
+        clear.triggered.connect(lambda: self._clear_module(kind))
+        m.addSeparator()
+        a = m.addAction(f"移除「{name}」模块")
+        a.triggered.connect(lambda: self._remove(kind))
+        if self.island:
+            self.island.locks.add("menu")
+            m.aboutToHide.connect(lambda: self.island.locks.discard("menu"))
+        m.popup(QtGui.QCursor.pos())
+
+    def _clear_module(self, kind):
+        self.ctx.notify.clear_messages(kind)
+        self.refresh()
+
+    def _add(self, kind):
+        mods = enabled_message_modules()
+        if kind in mods:
+            return
+        mods.append(kind)
+        cfg.set("notify.modules", mods)
+        self._build_tiles()
+
+    def _remove(self, kind):
+        mods = [k for k in enabled_message_modules() if k != kind]
+        cfg.set("notify.modules", mods)
+        self.ctx.notify.clear(kind)          # 清掉该模块的未读计数
+        self._build_tiles()
 
     def _open(self, kind):
         self.ctx.notify.open(kind)
@@ -638,7 +781,7 @@ class MessagesPage(Page):
 
     def refresh(self):
         counts = self.ctx.notify.counts
-        hist = list(self.ctx.notify.history)
+        hist = [h for h in list(self.ctx.notify.history) if h.get("kind") in self.tiles]
         for k, t in self.tiles.items():
             last = next((h for h in hist if h.get("kind") == k), None)
             t.set_count(counts.get(k, 0), time.strftime("%H:%M", time.localtime(last["time"])) if last else "")

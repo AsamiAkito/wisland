@@ -215,13 +215,19 @@ class WeatherService(QtCore.QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         ui(lambda: None)
-        self._client = httpx.Client(timeout=httpx.Timeout(12.0, connect=6.0), follow_redirects=True)
+        self._client = httpx.Client(timeout=httpx.Timeout(20.0, connect=8.0), follow_redirects=True)
         self._busy = False
         self._again = False
+        self._running = False
+        self._geo_cache: dict[str, dict] = {}
         self.last: dict = {}
         self.cities_data: list[dict] = []
         self._timer = QtCore.QTimer(self)
         self._timer.timeout.connect(self.refresh)
+        # 整批失败后 60 秒再试一次，不必等下一个 15 分钟周期（瞬时超时很常见）
+        self._retry = QtCore.QTimer(self)
+        self._retry.setSingleShot(True)
+        self._retry.timeout.connect(self.refresh)
 
     # ---------- 城市列表 ----------
     def cities(self) -> list[dict]:
@@ -265,9 +271,8 @@ class WeatherService(QtCore.QObject):
         def geo():
             if not key:
                 return self._geocode(query)
-            r = self._client.get("https://api.openweathermap.org/geo/1.0/direct",
-                                 params={"q": query, "limit": 1, "appid": key})
-            r.raise_for_status()
+            r = self._get("https://api.openweathermap.org/geo/1.0/direct",
+                          {"q": query, "limit": 1, "appid": key})
             js = r.json()
             return js[0] if js else None
 
@@ -289,6 +294,7 @@ class WeatherService(QtCore.QObject):
 
     # ---------- 刷新 ----------
     def start(self):
+        self._running = True
         try:
             mins = max(5.0, float(cfg.get("weather.interval_min") or 15))
         except (TypeError, ValueError):
@@ -297,15 +303,37 @@ class WeatherService(QtCore.QObject):
         self.refresh()
 
     def stop(self):
+        self._running = False
         self._timer.stop()
+        self._retry.stop()
 
     def refresh(self):
+        self._retry.stop()
         if self._busy:
             self._again = True
             return
         key = str(cfg.get("weather.api_key") or "").strip()      # 空 = 用 Open-Meteo
         self._busy = True
         run_bg(self._fetch_all, key, self.cities(), on_done=self._done, on_error=self._fail)
+
+    def _get(self, url: str, params: dict, tries: int = 2) -> httpx.Response:
+        """带重试的 GET：超时 / 连接失败 / 5xx 时再试一次（第一次常因 TLS 握手慢而超时）。"""
+        last: Exception | None = None
+        for attempt in range(tries):
+            try:
+                r = self._client.get(url, params=params)
+                r.raise_for_status()
+                return r
+            except httpx.HTTPStatusError as e:
+                last = e
+                if e.response.status_code < 500 or attempt == tries - 1:
+                    raise
+            except (httpx.TimeoutException, httpx.TransportError) as e:
+                last = e
+                if attempt == tries - 1:
+                    raise
+            time.sleep(0.4 * (attempt + 1))
+        raise last  # type: ignore[misc]
 
     def _params(self, key: str, c: dict) -> dict:
         p = {"appid": key, "units": cfg.get("weather.units") or "metric", "lang": cfg.get("weather.lang") or "zh_cn"}
@@ -317,22 +345,31 @@ class WeatherService(QtCore.QObject):
 
     def _geocode(self, name: str) -> dict | None:
         """Open-Meteo 地理编码（支持中文城市名）-> {lat, lon, country} 或 None。"""
-        r = self._client.get(OM_GEO, params={"name": name, "count": 1, "language": "zh", "format": "json"})
-        r.raise_for_status()
+        r = self._get(OM_GEO, {"name": name, "count": 1, "language": "zh", "format": "json"})
         res = (r.json().get("results") or [])
         if not res:
             return None
         g = res[0]
         return {"lat": g["latitude"], "lon": g["longitude"], "country": g.get("country_code", "")}
 
+    def _geocode_cached(self, name: str) -> dict | None:
+        """城市名 -> 坐标，成功结果在本次运行内缓存（默认城市没有写 lat/lon，避免每次刷新都查一次）。"""
+        key = str(name or "").strip()
+        if key in self._geo_cache:
+            return self._geo_cache[key]
+        g = self._geocode(key)
+        if g:
+            self._geo_cache[key] = g
+        return g
+
     def _fetch_open_meteo(self, c: dict) -> dict:
         lat, lon = c.get("lat"), c.get("lon")
         if lat in (None, "") or lon in (None, ""):
-            g = self._geocode(c.get("q") or c.get("name") or "Shanghai")
+            g = self._geocode_cached(c.get("q") or c.get("name") or "Shanghai")
             if not g:
                 raise ValueError(f"找不到城市：{c.get('name')}")
             lat, lon = g["lat"], g["lon"]
-        r = self._client.get(OM_API, params={
+        r = self._get(OM_API, {
             "latitude": lat, "longitude": lon, "timezone": "auto", "timeformat": "unixtime",
             "wind_speed_unit": "ms", "forecast_days": 6,
             "current": "temperature_2m,relative_humidity_2m,apparent_temperature,is_day,weather_code,"
@@ -340,7 +377,6 @@ class WeatherService(QtCore.QObject):
             "hourly": "temperature_2m,weather_code,precipitation_probability,is_day",
             "daily": "weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset",
         })
-        r.raise_for_status()
         d = parse_open_meteo(r.json())
         d["name"] = d["city"] = c.get("name") or ""
         return d
@@ -349,12 +385,10 @@ class WeatherService(QtCore.QObject):
         if not key:
             return self._fetch_open_meteo(c)
         p = self._params(key, c)
-        r = self._client.get(API + "/weather", params=p)
-        r.raise_for_status()
+        r = self._get(API + "/weather", p)
         cur = r.json()
         try:
-            r2 = self._client.get(API + "/forecast", params=p)
-            r2.raise_for_status()
+            r2 = self._get(API + "/forecast", p)
             fc = r2.json()
         except Exception:  # noqa: BLE001
             fc = None
@@ -389,6 +423,16 @@ class WeatherService(QtCore.QObject):
         if self._again:
             self._again = False
             self.refresh()
+        else:
+            self._retry_after_failure(data)
+
+    def _retry_after_failure(self, data: list[dict]):
+        """整批都是可重试的网络错误时，60 秒后再试（否则等 15 分钟太久了）。"""
+        if not self._running or not data or any(d.get("ok") for d in data):
+            return
+        err = " ".join(str(d.get("error") or "") for d in data)
+        if any(k in err for k in ("超时", "无法连接", "服务错误", "服务繁忙")):
+            self._retry.start(60_000)
 
     def _publish(self):
         for i, d in enumerate(self.cities_data):
@@ -402,6 +446,8 @@ class WeatherService(QtCore.QObject):
         d = dict(self.last) if self.last.get("ok") else {}
         d.update({"ok": False, "error": self._friendly(e)})
         self._emit_first(d)
+        if self._running:
+            self._retry.start(60_000)
 
     @staticmethod
     def _friendly(e: Exception) -> str:

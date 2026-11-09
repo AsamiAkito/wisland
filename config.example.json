@@ -11,6 +11,7 @@
     "blur_fps": 8,
     "scale": 1.0,
     "default_tab": "home",
+    "hidden_tabs": [],
     "expand_mode": "hover",
     "pinned": false,
     "compact_view": "clock",
@@ -36,18 +37,75 @@
     ]
   },
   "notify": {
+    "modules": [
+      "qq",
+      "wechat",
+      "mail"
+    ],
+    "body_preview": [
+      "feishu",
+      "dingtalk"
+    ],
     "toast_apps": {
       "QQ": {
         "name": "QQ",
         "kind": "qq"
       },
+      "Weixin": {
+        "name": "微信",
+        "kind": "wechat"
+      },
       "ThunderbirdToast": {
         "name": "邮件",
         "kind": "mail"
       },
-      "Weixin": {
-        "name": "微信",
-        "kind": "wechat"
+      "microsoft.windowscommunicationsapps_8wekyb3d8bbwe!microsoft.windowslive.mail": {
+        "name": "邮件",
+        "kind": "mail"
+      },
+      "Microsoft.OutlookForWindows": {
+        "name": "邮件",
+        "kind": "mail"
+      },
+      "Microsoft.Outlook": {
+        "name": "邮件",
+        "kind": "mail"
+      },
+      "Outlook": {
+        "name": "邮件",
+        "kind": "mail"
+      },
+      "com.electron.Feishu": {
+        "name": "飞书",
+        "kind": "feishu"
+      },
+      "electron.app.Feishu": {
+        "name": "飞书",
+        "kind": "feishu"
+      },
+      "Feishu": {
+        "name": "飞书",
+        "kind": "feishu"
+      },
+      "Lark": {
+        "name": "飞书",
+        "kind": "feishu"
+      },
+      "electron.app.Lark": {
+        "name": "飞书",
+        "kind": "feishu"
+      },
+      "DingTalk": {
+        "name": "钉钉",
+        "kind": "dingtalk"
+      },
+      "electron.app.DingTalk": {
+        "name": "钉钉",
+        "kind": "dingtalk"
+      },
+      "com.alibaba.dingtalk": {
+        "name": "钉钉",
+        "kind": "dingtalk"
       }
     },
     "flash_processes": {
@@ -66,12 +124,38 @@
       "thunderbird.exe": {
         "name": "邮件",
         "kind": "mail"
+      },
+      "hxoutlook.exe": {
+        "name": "邮件",
+        "kind": "mail"
+      },
+      "olk.exe": {
+        "name": "邮件",
+        "kind": "mail"
+      },
+      "outlook.exe": {
+        "name": "邮件",
+        "kind": "mail"
+      },
+      "feishu.exe": {
+        "name": "飞书",
+        "kind": "feishu"
+      },
+      "lark.exe": {
+        "name": "飞书",
+        "kind": "feishu"
+      },
+      "dingtalk.exe": {
+        "name": "钉钉",
+        "kind": "dingtalk"
       }
     },
     "open": {
       "qq": "",
       "wechat": "",
-      "mail": ""
+      "mail": "",
+      "feishu": "",
+      "dingtalk": ""
     }
   },
   "stocks": {

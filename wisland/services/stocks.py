@@ -171,6 +171,8 @@ class StockService(QtCore.QObject):
 
     # ---------- lifecycle ----------
     def start(self):
+        if self._running:
+            return                       # 重复调用（重新加载配置 / 再次显示板块）时不打断轮询
         self._running = True
         self._tick()
 

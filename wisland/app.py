@@ -43,7 +43,7 @@ class Actions(QtCore.QObject):
         self._trans_show_page = show_page
         self.ctx.pages["trans"].start(text, rid)
         isl = self.ctx.island
-        if show_page:
+        if show_page and "trans" in isl.nav.keys():
             isl.expand("trans")
         elif not isl.expanded:
             isl.activity({"glyph": G.TRANSLATE, "title": "翻译中…", "sub": text[:30]}, 20)
@@ -77,7 +77,9 @@ def autostart_enabled() -> bool:
 
 
 def _autostart_cmd() -> str:
-    """开机自启命令：通过 wisland.vbs 启动（它会选用不带控制台的 pythonw，不会弹出终端窗口）。"""
+    """开机自启命令：打包后用 exe 自己；源码运行通过 wisland.vbs（不会弹出终端窗口）。"""
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}"'
     wscript = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "wscript.exe")
     return f'"{wscript}" "{ROOT / "wisland.vbs"}"'
 
@@ -134,7 +136,7 @@ def main():
     from .services.translate import TranslateService
     from .services.weather import WeatherService, weather_glyph
     from .ui.island import Island
-    from .ui.pages.home import HomePage, MessagesPage
+    from .ui.pages.home import (HomePage, MessagesPage, enabled_message_modules, module_info)
     from .ui.pages.info import StocksPage, WeatherPage
     from .ui.pages.system import ControlsPage, styled_menu
     from .ui.pages.tools import ClipboardPage, TranslatePage
@@ -170,13 +172,25 @@ def main():
     ctx.pages = {p.key: p for p in pages}
     P = ctx.pages
 
+    SECTIONS = [("stock", "股票"), ("weather", "天气"), ("ctl", "控制"),
+                ("clip", "剪贴板"), ("trans", "翻译")]
+    SECTION_KEYS = {k for k, _ in SECTIONS}
+
+    def hidden_tabs() -> list:
+        v = cfg.get("island.hidden_tabs")
+        return [k for k in v if isinstance(k, str)] if isinstance(v, list) else []
+
+    def page_on(key: str) -> bool:
+        """板块是否显示在灵动岛里（主页与消息固定显示）。"""
+        return key not in SECTION_KEYS or key not in hidden_tabs()
+
     def peak():
         try:
             return ctx.audio.peak()
         except Exception:  # noqa: BLE001
             return 0.0
 
-    island = Island(pages, peak_fn=peak)
+    island = Island(pages, peak_fn=peak, visible_fn=page_on)
     ctx.island = island
     compact = island.compact
 
@@ -277,16 +291,26 @@ def main():
     # ---------------- 消息提醒 ----------------
     def on_notified(n):
         kind = n.get("kind", "other")
-        glyph = {"mail": G.MAIL, "qq": G.CHAT, "wechat": G.MESSAGE}.get(kind, G.BELL)
-        sub = "新邮件" if kind == "mail" else (n.get("sender") or "新消息")
+        glyph = module_info(kind)[1]
+        body = (n.get("body") or "").strip()
+        sender = (n.get("sender") or "").strip()
+        if body:
+            # 正文预览（飞书 / 钉钉等）：有发送者就用发送者做标题，正文做副标题
+            title = sender or n.get("name", kind)
+            sub = body
+        else:
+            title = n.get("name", kind)
+            sub = "新邮件" if kind == "mail" else (sender or "新消息")
         compact.pet.react("surprise")
         P["home"].pet.face.react("surprise")
         island.activity({"glyph": glyph, "color": KIND_COLORS.get(kind, KIND_COLORS["other"]),
-                         "title": n.get("name", kind), "sub": sub}, 4.0)
+                         "title": title, "sub": sub}, 4.0)
         if P["msg"].active:
             P["msg"].refresh()
 
     def on_counts(c):
+        kinds = set(enabled_message_modules())
+        c = {k: v for k, v in c.items() if k in kinds}
         compact.badges = dict(c)
         island.nav.set_badge("msg", sum(c.values()))
         if P["msg"].active:
@@ -302,6 +326,8 @@ def main():
     ctx.stocks.updated.connect(P["stock"].set_data)
 
     def on_stock_alert(a):
+        if not page_on("stock"):
+            return                       # 板块已隐藏：不再在收起态弹出股票提醒
         pct = a.get("pct") or 0
         col = theme.up() if pct > 0 else theme.down()
         island.activity({"glyph": G.STOCK, "color": col, "title": a.get("name", a.get("code", "")),
@@ -360,16 +386,45 @@ def main():
         elif name == "translate":
             ctx.actions.translate_clipboard()
         elif name == "clipboard":
-            island.toggle("clip")
+            if page_on("clip"):
+                island.toggle("clip")
+            else:
+                island.activity({"glyph": G.CLIP, "title": "剪贴板板块已关闭",
+                                 "sub": "右键 → 显示板块 可开启"}, 3.0)
     island.hotkey.connect(on_hotkey)
 
     # ---------------- 菜单 / 托盘 ----------------
+    def set_section_show(key: str, label: str, on: bool):
+        """显示 / 隐藏某个板块（立即生效；股票会同时启停行情轮询）。"""
+        hidden = [k for k in hidden_tabs() if k != key]
+        if not on:
+            hidden.append(key)
+        cfg.set("island.hidden_tabs", hidden)
+        island.apply_page_visibility()
+        if key == "stock":
+            if on:
+                ctx.stocks.start()
+            else:
+                ctx.stocks.stop()
+        pg = next((p for p in island.all_pages if p.key == key), None)
+        glyph = pg.glyph if pg is not None else G.APPS
+        island.activity({"glyph": glyph, "title": f"已{'显示' if on else '隐藏'}{label}板块"}, 2.0)
+
+    def toggle_section(key: str, label: str):
+        set_section_show(key, label, not page_on(key))
+
     def reload_cfg():
         cfg.load()
         theme.set_mode(cfg.get("island.theme", "auto"))
         island.register_hotkeys()
         P["home"].build_launcher()
+        P["msg"].sync_modules()
         ctx.weather.refresh()
+        island.apply_page_visibility()
+        if page_on("stock"):
+            ctx.stocks.start()
+        else:
+            ctx.stocks.stop()
         island.activity({"glyph": G.CHECK, "title": "配置已重新加载"}, 1.8)
 
     def build_menu(menu: QtWidgets.QMenu):
@@ -383,6 +438,10 @@ def main():
         for mode, label in (("hover", "悬停展开"), ("always", "常驻展开"), ("never", "长关")):
             a = em.addAction(("✓  " if island.expand_mode() == mode else "    ") + label)
             a.triggered.connect(lambda _=False, m=mode: island.set_expand_mode(m))
+        sm = menu.addMenu("显示板块")
+        for key, label in SECTIONS:
+            a = sm.addAction(("✓  " if page_on(key) else "    ") + label)
+            a.triggered.connect(lambda _=False, k=key, l=label: toggle_section(k, l))
         a = menu.addAction(("✓  " if island.passthrough() else "    ") + "可穿透")
         a.triggered.connect(lambda: island.set_passthrough(not island.passthrough()))
         a = menu.addAction(("✓  " if island.capture_visible() else "    ") + "参与截图")
@@ -472,8 +531,11 @@ def main():
     for s in (ctx.media, ctx.audio, ctx.brightness, ctx.radio, ctx.windows, ctx.notify, ctx.stocks,
               ctx.weather, ctx.clash, ctx.translate, ctx.clipboard, ctx.mailcheck, ctx.learn):
         try:
-            if hasattr(s, "start"):
-                s.start()
+            if not hasattr(s, "start"):
+                continue
+            if s is ctx.stocks and not page_on("stock"):
+                continue                    # 股票板块隐藏时不轮询行情
+            s.start()
         except Exception:  # noqa: BLE001
             traceback.print_exc()
     fs_timer.start()

@@ -213,7 +213,7 @@ class Island(QtWidgets.QWidget):
 
     play_pause_requested = QtCore.Signal()      # 收起态音乐视图的播放 / 暂停键
 
-    def __init__(self, pages: list, peak_fn=None):
+    def __init__(self, pages: list, peak_fn=None, visible_fn=None):
         super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
                          | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.NoDropShadowWindowHint)
         self.setWindowTitle("wisland")
@@ -225,7 +225,10 @@ class Island(QtWidgets.QWidget):
 
         self.backdrop = Backdrop()
         self.compact = CompactView()
-        self.pages = pages
+        self.all_pages = list(pages)
+        self._visible_fn = visible_fn or (lambda key: True)
+        self.pages = [pg for pg in self.all_pages if self._visible_fn(pg.key)]
+        pages = self.pages                        # 下面构建导航 / 页面栈只用可见的板块
 
         # ---- 几何状态 ----
         self.edge: str = cfg.get("island.edge", "top")
@@ -440,6 +443,46 @@ class Island(QtWidgets.QWidget):
     def _defer_show(self, pg):
         """页面的数据刷新稍后执行，让形变动画先跑起来。"""
         QtCore.QTimer.singleShot(40, lambda: pg.on_show() if self.expanded and self.pages[self.stack.currentIndex()] is pg else None)
+
+    def apply_page_visibility(self):
+        """按 visible_fn 重建标签组：运行时开启 / 隐藏某个板块（如「股票」）。"""
+        vis = [pg for pg in self.all_pages if self._visible_fn(pg.key)]
+        if [pg.key for pg in vis] == [pg.key for pg in self.pages]:
+            return
+        cur = self._page_key
+        before = self.stack.currentWidget()
+        removed = False
+        for pg in list(self.pages):
+            if pg in vis:
+                continue
+            removed = True
+            if before is pg:
+                pg.on_hide()
+            self.stack.removeWidget(pg)
+            pg.island = None
+        if removed:
+            self.release_focus()
+        for i, pg in enumerate(vis):
+            if self.stack.indexOf(pg) < 0:
+                self.stack.insertWidget(i, pg)
+            pg.island = self
+        self.pages = vis
+        self.nav.set_items([(pg.key, pg.glyph, pg.title) for pg in vis])
+        if cur not in self.nav.keys():
+            cur = vis[0].key
+            cfg.set("island.last_tab", cur, save=False)
+        self._page_key = cur
+        self.nav.set_current(cur)
+        self.stack.setCurrentWidget(next(pg for pg in vis if pg.key == cur))
+        self._floor_t.clear()
+        self._floor_on.clear()
+        if self.expanded:
+            w, h = self.target_size()
+            self.sw.to(w, 440, 0.6)
+            self.sh.to(h, 440, 0.6)
+            if self.stack.currentWidget() is not before:
+                self._defer_show(self.stack.currentWidget())
+        self._kick()
 
     def page_size_changed(self):
         """页面内容高度变化时由页面调用。"""

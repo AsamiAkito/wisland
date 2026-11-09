@@ -29,18 +29,15 @@ class NavBar(QtWidgets.QWidget):
 
     def __init__(self, items: list[tuple[str, str, str]], parent=None, height: int = 36):
         super().__init__(parent)
-        self.items = items                       # (key, glyph, label)
+        self.items: list[tuple[str, str, str]] = []       # (key, glyph, label)
         self.index = 0
         self.setFixedHeight(height)
         self.setMouseTracking(True)
         self.font_ = ui_font(12.5, W.DemiBold)
-        fm = QtGui.QFontMetrics(self.font_)
-        self.full_w = [ICON_W + fm.horizontalAdvance(lbl) + 46 for _, _, lbl in items]   # 选中时文字右侧留出更大空白
         self.anchor_fn = None          # 返回第一个标签（主页）中心应对齐的 x（导航栏坐标），None = 整组居中
-        self.w = [Spring(ICON_W, 260, 0.56, 0.05) for _ in items]
-        self.hover = [Spring(0, 400, 1.0, 0.01) for _ in items]
+        self.w: list[Spring] = []
+        self.hover: list[Spring] = []
         self.badges: dict[str, int] = {}
-        self.w[0].snap(self.full_w[0])
         self._hover_i = -1
         self._press_pos: QtCore.QPoint | None = None
         self._lp = QtCore.QTimer(self, singleShot=True, interval=LONG_PRESS_MS, timeout=self._long_press)
@@ -51,6 +48,26 @@ class NavBar(QtWidgets.QWidget):
         # 右侧按钮（不属于图标组）
         self.extra = QtWidgets.QHBoxLayout()
         self.right_buttons: list[IconButton] = []
+
+        self.set_items(items)
+
+    def set_items(self, items: list[tuple[str, str, str]]):
+        """重建标签组（开关某个板块时用），尽量保留当前选中的标签。"""
+        cur = self.current() if self.items else None
+        self.items = list(items)
+        fm = QtGui.QFontMetrics(self.font_)
+        self.full_w = [ICON_W + fm.horizontalAdvance(lbl) + 46 for _, _, lbl in self.items]   # 选中时文字右侧留出更大空白
+        self.w = [Spring(ICON_W, 260, 0.56, 0.05) for _ in self.items]
+        self.hover = [Spring(0, 400, 1.0, 0.01) for _ in self.items]
+        keys = self.keys()
+        self.index = keys.index(cur) if cur in keys else 0
+        self._hover_i = -1
+        self._press_pos = None
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+        if self.w:
+            self.w[self.index].snap(self.full_w[self.index])
+        self.update()
+        self._kick()
 
     def add_right_button(self, glyph: str, tip: str, cb) -> IconButton:
         b = IconButton(glyph, 30, 13, tip, self)

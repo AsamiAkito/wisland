@@ -49,6 +49,8 @@ class G:
     CHECK = "\uE73E"
     BELL = "\uEA8F"
     CHAT = "\uE8F2"
+    SEND = "\uE724"
+    CONTACT = "\uE77B"
     MUSIC = "\uE8D6"
     MONITOR = "\uE7F4"
     TRASH = "\uE74D"
@@ -266,6 +268,8 @@ KIND_COLORS = {
     "qq": QtGui.QColor("#12b7f5"),
     "wechat": QtGui.QColor("#07c160"),
     "mail": QtGui.QColor("#ff9f0a"),
+    "feishu": QtGui.QColor("#00c2a8"),
+    "dingtalk": QtGui.QColor("#1e9bff"),
     "stock": QtGui.QColor("#ff5a52"),
     "other": QtGui.QColor("#8e8e93"),
 }

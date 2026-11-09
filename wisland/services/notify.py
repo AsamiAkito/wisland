@@ -6,7 +6,8 @@
   B. UI 收到 HSHELL_FLASH 时调用 on_flash(hwnd)，按进程名映射（8 秒内同类去重）。
   C. 邮件兜底：每 20 秒检查 Thunderbird 各账户 INBOX mbox 文件是否变大。
 
-隐私：不对外暴露消息正文；邮件连发件人都不带。QQ/微信 仅可选带 "sender"（toast 第一行文字）。
+隐私：邮件不带发件人；QQ / 微信 / 飞书 / 钉钉 可带 "sender"（toast 第一行文字）；
+notify.body_preview 里的模块额外读取 toast 正文做预览（只在内存里，不落盘）。
 """
 from __future__ import annotations
 
@@ -46,21 +47,40 @@ def filetime_to_epoch(ft) -> float:
 
 
 _TEXT_RE = re.compile(r"<text\b[^>]*>(.*?)</text>", re.S | re.I)
+DEFAULT_BODY_PREVIEW = ("feishu", "dingtalk")
+
+
+def _unescape(s: str) -> str:
+    return (s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"')
+            .replace("&apos;", "'").replace("&amp;", "&"))
+
+
+def toast_texts(payload) -> list[str]:
+    """toast XML 里的全部 <text>（按出现顺序）：通常是 [发送者/标题, 正文, …]。"""
+    try:
+        s = payload.decode("utf-8", "replace") if isinstance(payload, (bytes, bytearray)) else str(payload or "")
+        out = []
+        for m in _TEXT_RE.finditer(s):
+            t = _unescape(re.sub(r"<[^>]+>", "", m.group(1))).strip()
+            if t:
+                out.append(t[:200])
+        return out[:4]
+    except Exception:  # noqa: BLE001
+        return []
 
 
 def toast_first_text(payload) -> str:
     """toast XML 的第一个 <text>（通常是发送者 / 群名）。解析失败返回空串。"""
-    try:
-        s = payload.decode("utf-8", "replace") if isinstance(payload, (bytes, bytearray)) else str(payload or "")
-        m = _TEXT_RE.search(s)
-        if not m:
-            return ""
-        t = re.sub(r"<[^>]+>", "", m.group(1))
-        t = (t.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"')
-             .replace("&apos;", "'").replace("&amp;", "&")).strip()
-        return t[:40]
-    except Exception:  # noqa: BLE001
-        return ""
+    texts = toast_texts(payload)
+    return texts[0][:40] if texts else ""
+
+
+def body_preview_kinds() -> set:
+    """开启正文预览的模块（config.json → notify.body_preview）。"""
+    v = cfg.get("notify.body_preview")
+    if isinstance(v, list):
+        return {k for k in v if isinstance(k, str)}
+    return set(DEFAULT_BODY_PREVIEW)
 
 
 # ---------------- hwnd -> exe ----------------
@@ -194,6 +214,20 @@ class NotifyService(QtCore.QObject):
             self.counts[kind] = 0
             self.counts_changed.emit(dict(self.counts))
 
+    def clear_all(self):
+        """清空全部消息：未读计数 + 历史列表（不删除消息模块）。"""
+        self.clear_messages()
+
+    def clear_messages(self, kind: str | None = None):
+        """清空全部消息，或只清空某个模块的消息（未读计数 + 历史）。"""
+        if kind is None:
+            self.counts.clear()
+            self.history.clear()
+        else:
+            self.counts.pop(kind, None)
+            self.history[:] = [h for h in self.history if h.get("kind") != kind]
+        self.counts_changed.emit(dict(self.counts))
+
     def open(self, kind: str):
         path = cfg.get(f"notify.open.{kind}") or next(
             (exe for exe, m in (cfg.get("notify.flash_processes") or {}).items() if m.get("kind") == kind), "")
@@ -222,8 +256,18 @@ class NotifyService(QtCore.QObject):
             pass
 
     # ---------- internal ----------
+    @staticmethod
+    def _enabled_modules() -> set:
+        """消息页启用的模块；未启用的应用通知直接忽略（相当于“未添加该模块”）。"""
+        v = cfg.get("notify.modules")
+        if isinstance(v, list):
+            return {k for k in v if isinstance(k, str)}
+        return {"qq", "wechat", "mail"}
+
     def _emit(self, d: dict):
         kind = d["kind"]
+        if kind not in self._enabled_modules():
+            return
         self._last_by_kind[kind] = time.time()
         if kind == "mail":
             d.pop("sender", None)
@@ -238,9 +282,12 @@ class NotifyService(QtCore.QObject):
     @staticmethod
     def _map_handler(primary: str, apps: dict):
         # 前缀后必须是结尾或非字母数字（'ThunderbirdToast-990…' 命中，'QQExtension_…' 不命中）
+        # 不区分大小写：UWP 应用的 AUMID 在通知库里的大小写并不统一
+        p = (primary or "").lower()
         for prefix, m in apps.items():
-            if primary and primary.startswith(prefix):
-                rest = primary[len(prefix):]
+            pref = str(prefix).lower()
+            if p.startswith(pref):
+                rest = p[len(pref):]
                 if not rest or not rest[0].isalnum():
                     return m
         return None
@@ -289,6 +336,7 @@ class NotifyService(QtCore.QObject):
         if not rows:
             return
         apps = cfg.get("notify.toast_apps") or {}
+        body_kinds = body_preview_kinds()
         for _id, primary, arrival, ntype, payload in rows:
             try:
                 if str(ntype or "").lower() not in ("toast", ""):
@@ -299,10 +347,16 @@ class NotifyService(QtCore.QObject):
                 kind = m.get("kind", "other")
                 d = {"kind": kind, "name": m.get("name", kind), "source": "toast",
                      "time": filetime_to_epoch(arrival)}
-                if kind in ("qq", "wechat"):
-                    s = toast_first_text(payload)
-                    if s:
-                        d["sender"] = s
+                texts = toast_texts(payload)
+                if texts and kind in ("qq", "wechat", "feishu", "dingtalk"):
+                    if len(texts) > 1 or kind not in body_kinds:
+                        d["sender"] = texts[0][:40]
+                if kind in body_kinds:
+                    if len(texts) > 1:
+                        d["body"] = texts[1][:120]
+                    elif texts:
+                        # 只有一个 <text> 的通知：把它当作正文，至少能预览一句
+                        d["body"] = texts[0][:120]
                 self._emit(d)
             except Exception:  # noqa: BLE001
                 continue
