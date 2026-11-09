@@ -76,11 +76,31 @@ def autostart_enabled() -> bool:
         return False
 
 
+def _autostart_cmd() -> str:
+    """开机自启命令：通过 wisland.vbs 启动（它会选用不带控制台的 pythonw，不会弹出终端窗口）。"""
+    wscript = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "wscript.exe")
+    return f'"{wscript}" "{ROOT / "wisland.vbs"}"'
+
+
+def fix_autostart():
+    """旧版本直接用 .venv/Scripts/pythonw.exe 自启：在 uv 创建的环境里会弹出终端窗口，
+    关掉窗口灵动岛也会退出。检测到旧的命令就改成通过 wisland.vbs 启动。"""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+            cur, _ = winreg.QueryValueEx(k, "wisland")
+    except OSError:
+        return
+    if cur != _autostart_cmd():
+        try:
+            set_autostart(True)
+        except OSError:
+            pass
+
+
 def set_autostart(on: bool):
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
         if on:
-            pyw = ROOT / ".venv" / "Scripts" / "pythonw.exe"
-            winreg.SetValueEx(k, "wisland", 0, winreg.REG_SZ, f'"{pyw}" "{ROOT / "run.pyw"}"')
+            winreg.SetValueEx(k, "wisland", 0, winreg.REG_SZ, _autostart_cmd())
         else:
             try:
                 winreg.DeleteValue(k, "wisland")
@@ -100,6 +120,7 @@ def main():
     if not lock.tryLock(100):
         print("wisland 已在运行")
         return 0
+    fix_autostart()
 
     from .services.audio import AudioService, BrightnessService
     from .services.clash import ClashService
