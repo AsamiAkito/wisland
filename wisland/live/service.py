@@ -50,11 +50,13 @@ class LiveService(QtCore.QObject):
     final_zh = QtCore.Signal(str, str)           # (sid, 最终译文)
     level = QtCore.Signal(float)
     running_changed = QtCore.Signal(bool)
+    downloading_changed = QtCore.Signal(bool)    # 正在下载识别模型
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.pipe = None
         self.running = False
+        self._dl = None
         # numpy / sherpa-onnx 导入要 0.5s 以上：启动后在后台预先导入，点「开始聆听」时不卡界面
         from ..core.bg import run_bg
         run_bg(lambda: __import__("wisland.live.pipeline"))
@@ -62,18 +64,27 @@ class LiveService(QtCore.QObject):
     def available(self) -> tuple[bool, str]:
         from .paths import MODELS
         if not (MODELS / "parakeet-ja-0.6b-int8").exists() or not (MODELS / "silero_vad.onnx").exists():
-            return False, "缺少识别模型，先运行 scripts/download_models.py 下载（约 630MB）"
+            return False, "缺少识别模型（约 630MB）"
         return True, ""
 
+    @property
+    def downloading(self) -> bool:
+        return bool(self._dl and self._dl.running)
+
     def toggle(self):
-        self.stop() if self.running else self.start_listen()
+        if self.downloading:
+            self._dl.cancel()
+        elif self.running:
+            self.stop()
+        else:
+            self.start_listen()
 
     def start_listen(self):
-        if self.running:
+        if self.running or self.downloading:
             return
         ok, msg = self.available()
         if not ok:
-            self.error.emit(msg)
+            self._download()
             return
         from .pipeline import Pipeline       # 重依赖（numpy / sherpa-onnx）用到时才导入
         p = Pipeline(_LiveConfig())
@@ -89,6 +100,25 @@ class LiveService(QtCore.QObject):
         self.running = True
         p.start()
         self.running_changed.emit(True)
+
+    def _download(self):
+        """第一次使用：在后台下载模型，下完自动开始聆听。"""
+        from .download import ModelDownloader
+        if self._dl is None:
+            self._dl = ModelDownloader(self)
+            self._dl.progress.connect(lambda f, text: self.status.emit(text))
+            self._dl.finished.connect(self._downloaded)
+        self.status.emit("正在连接下载服务器…")
+        self._dl.start()
+        self.downloading_changed.emit(True)
+
+    def _downloaded(self, ok: bool, msg: str):
+        self.downloading_changed.emit(False)
+        if ok:
+            self.status.emit("模型下载完成")
+            self.start_listen()
+        else:
+            self.error.emit(msg)
 
     def clip(self, sid: str):
         for pipe in (self.pipe, getattr(self, "_last_pipe", None)):

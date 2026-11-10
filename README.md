@@ -26,7 +26,7 @@
 - **消息**：QQ / 微信 / 邮件 提醒（读取 Windows 通知与任务栏闪烁，不读消息内容）
 - **股票**：A 股 / 港股 / 美股行情与分时（腾讯财经公开接口），点 + 搜索添加，右键删除
 - **天气**：多城市，逐小时与 5 天预报（默认 Open-Meteo，无需 Key）
-- **控制**：音量、亮度、WLAN、蓝牙；检测到 Clash Verge 时显示代理控制
+- **控制**：音量、亮度、WLAN、蓝牙（不读取 Wi-Fi 名称，因此不会触发 Windows 的位置访问）；检测到 Clash Verge 时显示代理控制
 - **剪贴板**：最近 10 条文字 / 图片，点击复制
 - **翻译**：日译中；实时字幕（系统声音 → 日语识别 → 翻译），滚轮上翻查看历史，点词查词，加入单词本并同步到 Anki
 - **主题**：深色 / 浅色 / 胭脂撞色 / 晴空渐变
@@ -40,7 +40,7 @@
 | 功能 | 需要什么 |
 | --- | --- |
 | 翻译、实时字幕的中文翻译 | DeepSeek API Key → `translate.api_key` |
-| 实时字幕的日语识别 | 下载模型（约 630 MB）：`.venv\Scripts\python.exe scripts\download_models.py`（国内网络可先 `set HF_ENDPOINT=https://hf-mirror.com`） |
+| 实时字幕的日语识别 | 无需设置：第一次点「开始聆听」会自动下载识别模型（约 630 MB，可断点续传，连不上 Hugging Face 时自动改用 hf-mirror 镜像） |
 | 点词查词的词典 | `.venv\Scripts\python.exe scripts\download_models.py --dict` |
 | 天气用 OpenWeather | `weather.api_key`（留空则使用 Open-Meteo） |
 | 自选股 | 股票页点 **+** 搜索添加，或编辑 `stocks.watchlist` |
@@ -49,7 +49,8 @@
 
 ## 常见问题
 
-- **双击 vbs 报错 80070002 / 没反应**：还没安装运行环境，先运行 `setup.bat`。日志在 `data\wisland.log`。
+- **双击 vbs 报错 80070002 / 没反应 / No module named 'PySide6'**：依赖没装进 `.venv`，运行 `setup.bat`（不要用全局的 `pip install`）；还不行就删掉 `.venv` 文件夹再运行一次。日志在 `data\wisland.log`。
+- **实时字幕没反应**：第一次使用要先下载模型，按钮旁会显示下载进度；下载失败时检查网络 / 代理后再点一次，会接着下载。没有填 DeepSeek Key 时只显示日语、不翻译。
 - **setup.bat 提示找不到 Python**：装 Python 时没勾选 Add to PATH；重新运行安装程序选 Modify 勾上即可。
 - **没显示正在播放 / 没有歌词**：网易云无需设置（读取它的本地日志）；QQ 音乐需在 设置 → 常规设置 中勾选「显示系统媒体传输控制(SMTC)」。没有接入系统媒体控件的播放器，播放按钮会改发键盘媒体键。周杰伦等网易云没有版权的歌曲没有歌词。
 - **不想自动切到音乐 / 不要歌词**：`config.json → media.auto_show` / `media.lyrics` 改为 false。

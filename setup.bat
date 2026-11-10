@@ -62,10 +62,17 @@ if errorlevel 1 (
     if errorlevel 1 goto :fail
 )
 
+rem make sure the packages really landed in .venv
+"%VPY%" -c "import PySide6.QtWidgets, httpx, winrt.runtime" >nul 2>nul
+if errorlevel 1 (
+    echo.
+    echo [x] Packages are still missing from .venv. Delete the .venv folder and run setup.bat again.
+    goto :fail
+)
+
 echo.
 echo  Done! Double-click "wisland.vbs" to start wisland.
-echo  Optional: live Japanese subtitles need models (about 630 MB):
-echo      .venv\Scripts\python.exe scripts\download_models.py
+echo  Live Japanese subtitles download their models (about 630 MB) the first time you use them.
 echo.
 choice /c YN /m "Start wisland now"
 if errorlevel 2 exit /b 0

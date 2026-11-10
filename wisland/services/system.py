@@ -53,7 +53,8 @@ class RadioService(QtCore.QObject):
     wifi_available, bt_available}"""
 
     changed = QtCore.Signal(dict)
-    POLL_S = 5.0
+    # 只读开关状态（Radio API，开销很小）；控制页打开时会立即刷新一次
+    POLL_S = 30.0
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -150,39 +151,12 @@ class RadioService(QtCore.QObject):
                     st["bt_on"] = st["bt_on"] or on
         except Exception:  # noqa: BLE001
             traceback.print_exc()
-        ssid, sig = "", None
-        if st["wifi_on"] or not st["wifi_available"]:
-            ssid, sig, iface = await asyncio.get_running_loop().run_in_executor(None, self._netsh)
-            if iface and not st["wifi_available"]:
-                st["wifi_available"] = True
-                st["wifi_on"] = True
-        st["wifi_ssid"], st["wifi_signal"] = ssid, sig
+        # 不再调用 netsh wlan 读取 Wi-Fi 名称：Windows 11 24H2 起它算作「访问位置」，
+        # 每次轮询任务栏都会闪位置图标。
         self.state = st
         if st != self._last_emit:
             self._last_emit = dict(st)
             self.changed.emit(dict(st))
-
-    @staticmethod
-    def _netsh():
-        """-> (ssid, signal%, has_interface)"""
-        try:
-            r = run_hidden(["netsh", "wlan", "show", "interfaces"], timeout=5)
-            text = _decode(r.stdout)
-        except Exception:  # noqa: BLE001
-            return "", None, False
-        ssid, sig, iface = "", None, False
-        for line in text.splitlines():
-            parts = re.split(r"\s*[:：]\s*", line.strip(), maxsplit=1)
-            if len(parts) != 2:
-                continue
-            key, val = parts
-            if key.upper() == "GUID":
-                iface = True
-            if "SSID" in key.upper() and "BSSID" not in key.upper() and not ssid:
-                ssid = val.strip()
-            elif sig is None and re.fullmatch(r"\d{1,3}\s*%", val.strip()):
-                sig = int(val.strip().rstrip("%").strip())
-        return ssid, sig, iface
 
     def _set(self, kind: int, on: bool):
         loop = self._loop

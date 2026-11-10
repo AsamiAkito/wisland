@@ -654,7 +654,8 @@ class TranslatePage(Page):
         self.level = LevelBar()
         clear = IconButton(G.TRASH, 30, 12, "清空")
         self.view = LiveView()
-        self.view.hint = "播放日语视频后点「开始聆听」"
+        self.view.hint = "播放日语视频后点「开始聆听」" + (
+            "" if ctx.live.available()[0] else "\n（第一次使用会先自动下载约 630MB 的识别模型）")
         clear.clicked.connect(self.view.clear)
         live_card = Card(radius=16)
         live_card.setLayout(vbox((self.view, 1), margins=(10, 8, 10, 8)))
@@ -687,6 +688,7 @@ class TranslatePage(Page):
         lv.status.connect(self.live_status.setText)
         lv.error.connect(lambda m: self.live_status.setText(m))
         lv.running_changed.connect(self._live_state)
+        lv.downloading_changed.connect(self._dl_state)
         theme.changed.connect(self._style)
         self._style()
         ctx.translate.delta.connect(self._delta)
@@ -735,6 +737,11 @@ class TranslatePage(Page):
     def show_live(self):
         self.mode.set_index(1)
         self.modes.setCurrentIndex(1)
+
+    def _dl_state(self, on: bool):
+        self.live_btn.set_text("取消下载" if on else "开始聆听")
+        self.live_btn.primary = not on
+        self.live_btn.update()
 
     def _live_state(self, on: bool):
         self.live_btn.set_text("停止聆听" if on else "开始聆听")
