@@ -2,6 +2,7 @@
 """wisland 入口：创建服务、页面、灵动岛，把信号连成"活动"提示。"""
 from __future__ import annotations
 
+import json
 import os
 import sys
 import time
@@ -125,6 +126,7 @@ def main():
     fix_autostart()
 
     from .services.audio import AudioService, BrightnessService
+    from .services.apps import seed_open_apps
     from .services.clash import ClashService
     from .services.clipboard import ClipboardService
     from .services.mailcheck import MailCheckService
@@ -140,7 +142,10 @@ def main():
     from .ui.pages.info import StocksPage, WeatherPage
     from .ui.pages.system import ControlsPage, styled_menu
     from .ui.pages.tools import ClipboardPage, TranslatePage
-    from .ui.theme import KIND_COLORS, THEME_NAMES, G, theme
+    from .ui.settings import SECTION_OPTIONS, SettingsWindow
+    from .ui.theme import KIND_COLORS, KIND_LIGHT_COLORS, THEME_NAMES, G, theme
+    from .ui.brand import kind_pixmap
+    from .ui.popup import MessagePopups
     from .ui.widgets import glyph_pixmap
 
     theme.set_mode(cfg.get("island.theme", "auto"))
@@ -167,13 +172,18 @@ def main():
     ctx.windows.notice.connect(lambda t: ctx.island and ctx.island.activity({"glyph": _G().MESSAGE, "title": t}, 5.0))
     ctx.island = None
 
+    # 第一次打开时读取本地常见程序，填进「消息与邮件 → 打开应用」；之后保留用户修改。
+    try:
+        seed_open_apps()
+    except Exception as e:  # noqa: BLE001
+        print("[notify] 初始化打开应用路径失败：", e)
+
     pages = [HomePage(ctx), MessagesPage(ctx), StocksPage(ctx), WeatherPage(ctx), ControlsPage(ctx),
              ClipboardPage(ctx), TranslatePage(ctx)]
     ctx.pages = {p.key: p for p in pages}
     P = ctx.pages
 
-    SECTIONS = [("stock", "股票"), ("weather", "天气"), ("ctl", "控制"),
-                ("clip", "剪贴板"), ("trans", "翻译")]
+    SECTIONS = [(k, label) for k, label, _glyph in SECTION_OPTIONS]
     SECTION_KEYS = {k for k, _ in SECTIONS}
 
     def hidden_tabs() -> list:
@@ -193,6 +203,9 @@ def main():
     island = Island(pages, peak_fn=peak, visible_fn=page_on)
     ctx.island = island
     compact = island.compact
+    popups = MessagePopups()
+    ctx.popups = popups
+    app.aboutToQuit.connect(popups.close_all)
 
     # ---------------- 媒体 ----------------
     media_st = {"key": None, "lyr": None, "prev_view": None, "playing": False}
@@ -274,6 +287,26 @@ def main():
     ctx.brightness.changed.connect(P["ctl"].set_brightness)
     ctx.radio.changed.connect(P["ctl"].set_radio)
 
+    # ---------------- 收起态：时间天气与小形象每隔几十秒自动轮换 ----------------
+    def auto_cycle():
+        if island.expanded or island.passthrough() or compact.view not in ("clock", "pet"):
+            return
+        compact.set_view("pet" if compact.view == "clock" else "clock")
+        island._kick()
+
+    cyc_timer = QtCore.QTimer(app)
+    cyc_timer.timeout.connect(auto_cycle)
+
+    def restart_cycle():
+        cyc_timer.stop()
+        try:
+            cyc = int(cfg.get("island.auto_cycle_s", 30) or 0)
+        except (TypeError, ValueError):
+            cyc = 30
+        if cyc > 0:
+            cyc_timer.start(cyc * 1000)
+    restart_cycle()
+
     # ---------------- Clash ----------------
     clash_state = {"mode": None}
 
@@ -303,7 +336,13 @@ def main():
             sub = "新邮件" if kind == "mail" else (sender or "新消息")
         compact.pet.react("surprise")
         P["home"].pet.face.react("surprise")
+        compact.idle_order = [kind] + [k for k in getattr(compact, "idle_order", []) if k != kind]
+        glow = KIND_LIGHT_COLORS.get(kind)
+        if glow is not None:
+            island.breath(glow, 5.0)
+        popups.show(kind, title, sub, island.scr)
         island.activity({"glyph": glyph, "color": KIND_COLORS.get(kind, KIND_COLORS["other"]),
+                         "icon": kind_pixmap(kind),
                          "title": title, "sub": sub}, 4.0)
         if P["msg"].active:
             P["msg"].refresh()
@@ -413,23 +452,107 @@ def main():
     def toggle_section(key: str, label: str):
         set_section_show(key, label, not page_on(key))
 
-    def reload_cfg():
+    def _sig(v) -> str:
+        return json.dumps(v, sort_keys=True, ensure_ascii=False, default=str)
+
+    def _cfg_state(d: dict) -> dict:
+        """从一份配置数据里取出 reload_cfg 需要比较的几项（设置窗口保存前会传旧的 data 进来）。"""
+        isl = d.get("island") if isinstance(d.get("island"), dict) else {}
+        mode = isl.get("expand_mode")
+        if mode not in ("hover", "always", "never"):
+            mode = "always" if isl.get("pinned", False) else "hover"
+
+        def box(name: str) -> dict:
+            v = d.get(name)
+            return v if isinstance(v, dict) else {}
+        mail, clash, weather = box("mail"), box("clash"), box("weather")
+        media = box("media")
+        return {
+            "expand": mode,
+            "passthrough": bool(isl.get("passthrough", False)),
+            "compact": isl.get("compact_view", "clock"),
+            "mail": _sig([mail.get("interval_s"), mail.get("imap")]),
+            "clash": _sig([clash.get("config_dir"), clash.get("app")]),
+            "weather": _sig([weather.get("api_key"), weather.get("units"), weather.get("lang"),
+                             weather.get("interval_min"), weather.get("cities")]),
+            "lyrics": _sig([media.get("lyrics"), media.get("lyrics_sources"),
+                            media.get("lyrics_custom_url")]),
+        }
+
+    def reload_cfg(prev_data=None):
+        """从磁盘重新读取配置并尽量立即生效（设置窗口保存后也走这里）。
+
+        prev_data：保存前的 cfg.data。设置窗口在写盘前先改了内存里的 cfg.data，
+        所以不能再用它当"保存前"的快照，由调用方传进来。
+        """
+        prev = _cfg_state(prev_data if isinstance(prev_data, dict) else cfg.data)
         cfg.load()
+        now = _cfg_state(cfg.data)
         theme.set_mode(cfg.get("island.theme", "auto"))
+        island.apply_layout_settings()
         island.register_hotkeys()
+        island.apply_capture_mode()
+        if now["expand"] != prev["expand"]:
+            island.set_expand_mode(now["expand"])
+        if now["passthrough"] != prev["passthrough"]:
+            island.set_passthrough(now["passthrough"])
+        if now["compact"] != prev["compact"]:
+            compact.set_view(now["compact"])
+            island._kick()
         P["home"].build_launcher()
         P["msg"].sync_modules()
-        ctx.weather.refresh()
+        if now["weather"] != prev["weather"]:
+            ctx.weather.stop()
+            ctx.weather.start()
+        if now["lyrics"] != prev["lyrics"]:
+            ctx.lyrics.clear()
+            media_st["lyr"] = None
         island.apply_page_visibility()
         if page_on("stock"):
             ctx.stocks.start()
         else:
             ctx.stocks.stop()
+        if now["mail"] != prev["mail"]:
+            ctx.mailcheck.stop()
+            ctx.mailcheck.start()
+        if now["clash"] != prev["clash"]:
+            ctx.clash.stop()
+            QtCore.QTimer.singleShot(600, ctx.clash.start)
+        restart_cycle()
         island.activity({"glyph": G.CHECK, "title": "配置已重新加载"}, 1.8)
 
+    _settings = {"win": None}
+
+    def open_settings():
+        """可视化设置窗口；已经打开时只把它带到前面。"""
+        win = _settings["win"]
+        if win is not None:
+            try:
+                if win.isVisible():
+                    win.raise_()
+                    win.activateWindow()
+                    return
+                win.close()
+                win.deleteLater()
+            except RuntimeError:
+                pass
+            _settings["win"] = None
+        win = SettingsWindow(on_apply=reload_cfg)
+        _settings["win"] = win
+
+        def on_closed():
+            if _settings["win"] is win:
+                _settings["win"] = None
+        win.closed.connect(on_closed)
+        win.show()
+        win.raise_()
+        win.activateWindow()
+
     def build_menu(menu: QtWidgets.QMenu):
-        menu.addAction("编辑配置 config.json").triggered.connect(lambda: os.startfile(str(CONFIG_PATH)))  # noqa: S606
+        menu.addAction("设置…").triggered.connect(open_settings)
+        menu.addAction("打开 config.json").triggered.connect(lambda: os.startfile(str(CONFIG_PATH)))  # noqa: S606
         menu.addAction("重新加载配置").triggered.connect(reload_cfg)
+        menu.addSeparator()
         tm = menu.addMenu("主题")
         for mode, label in THEME_NAMES:
             a = tm.addAction(("✓  " if cfg.get("island.theme") == mode else "    ") + label)
@@ -494,7 +617,7 @@ def main():
     home.a_pt.set_on(island.passthrough(), None, "可穿透")
     if island.passthrough():
         compact.set_view("pet")
-    island.nav.add_right_button(G.GEAR, "设置", lambda: show_menu(QtGui.QCursor.pos()))
+    island.nav.add_right_button(G.GEAR, "设置", open_settings)
 
     tray = QtWidgets.QSystemTrayIcon(QtGui.QIcon(glyph_pixmap(G.APPS, 32, QtGui.QColor("#4f8cff"))), app)
     tray.setToolTip("wisland 灵动岛")
@@ -504,16 +627,6 @@ def main():
     tray.setContextMenu(tmenu)
     tray.activated.connect(lambda r: island.toggle() if r == QtWidgets.QSystemTrayIcon.ActivationReason.Trigger else None)
     tray.show()
-
-    # ---------------- 收起态：时间天气与小形象每隔几十秒自动轮换 ----------------
-    def auto_cycle():
-        if island.expanded or island.passthrough() or compact.view not in ("clock", "pet"):
-            return
-        compact.set_view("pet" if compact.view == "clock" else "clock")
-        island._kick()
-    cyc = int(cfg.get("island.auto_cycle_s", 30) or 0)
-    if cyc > 0:
-        QtCore.QTimer(app, interval=cyc * 1000, timeout=auto_cycle).start()
 
     # ---------------- 全屏时隐藏 ----------------
     def check_fullscreen():

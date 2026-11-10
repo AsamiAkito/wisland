@@ -10,6 +10,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from ...core.bg import launch
 from ...core.config import cfg, expand
 from ..anim import Spring, clamp
+from ..brand import kind_pixmap, paint_icon_chip
 from ..theme import KIND_COLORS, G, W, icon_font, theme, ui_font
 from ..widgets import (Card, Hoverable, IconButton, Label, PillButton, ScrollArea, Themed, fmt_time, hbox,
                        painter, rounded_pixmap, vbox)
@@ -429,6 +430,33 @@ class LaunchIcon(Hoverable):
             p.drawText(r, Qt.AlignmentFlag.AlignCenter, (self.item.get("name") or "?")[:1])
 
 
+class AddLaunchIcon(Hoverable):
+    """启动器末尾的「+」：直接选一个 exe 加进来。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(44, 44)
+        self.setToolTip("添加应用或文件")
+
+    def paintEvent(self, e):
+        p = painter(self)
+        r = QtCore.QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        s = self.press_scale() * (1 + 0.04 * self._hover.x)
+        p.translate(r.center())
+        p.scale(s, s)
+        p.translate(-r.center())
+        if self._hover.x > 0.01:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(theme.hover())
+            p.drawRoundedRect(r, 12, 12)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QtGui.QPen(theme.text3(), 1, Qt.PenStyle.DashLine))
+        p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 11, 11)
+        p.setFont(icon_font(16))
+        p.setPen(theme.text2())
+        p.drawText(r, Qt.AlignmentFlag.AlignCenter, G.ADD)
+
+
 class PetWidget(QtWidgets.QWidget):
     """主页中间的大号小形象：眼睛跟随光标，鼠标靠近时开心。"""
     def __init__(self, parent=None, scale: float = 2.3):
@@ -532,9 +560,76 @@ class HomePage(Page):
             it = self.launch_row.takeAt(0)
             if it.widget():
                 it.widget().deleteLater()
+        add = AddLaunchIcon()
+        add.clicked.connect(self._add_launcher)
+        self.launch_row.addWidget(add)
         for item in cfg.get("launcher") or []:
-            self.launch_row.addWidget(LaunchIcon(item, self._open))
+            w = LaunchIcon(item, self._open)
+            w.right_clicked.connect(lambda item=item: self._launcher_menu(item))
+            self.launch_row.addWidget(w)
         self.launch_row.addStretch(1)
+
+    def _launcher_items(self) -> list[dict]:
+        return list(cfg.get("launcher") or [])
+
+    def _add_launcher(self):
+        if self.island:
+            self.island.locks.add("dialog")
+        try:
+            path, _ = QtWidgets.QFileDialog.getOpenFileName(
+                self, "添加应用或文件", "", "所有文件 (*.*);;应用程序 (*.exe)")
+        finally:
+            if self.island:
+                QtCore.QTimer.singleShot(1400, lambda: self.island and self.island.locks.discard("dialog"))
+        if not path:
+            return
+        path = os.path.normpath(path).replace("\\", "/")
+        items = self._launcher_items()
+        if any(os.path.normcase(expand(str(it.get("path", "")))) == os.path.normcase(path) for it in items):
+            return
+        items.append({"name": os.path.splitext(os.path.basename(path))[0], "path": path})
+        cfg.set("launcher", items)
+        self.build_launcher()
+
+    def _rename_launcher(self, item: dict):
+        if self.island:
+            self.island.locks.add("dialog")
+        try:
+            name, ok = QtWidgets.QInputDialog.getText(
+                self, "重命名应用", "名称：", text=str(item.get("name", "")))
+        finally:
+            if self.island:
+                QtCore.QTimer.singleShot(1200, lambda: self.island and self.island.locks.discard("dialog"))
+        name = (name or "").strip()
+        if not ok or not name:
+            return
+        items = self._launcher_items()
+        for it in items:
+            if it is item or (it.get("path") == item.get("path") and it.get("name") == item.get("name")):
+                it["name"] = name
+        cfg.set("launcher", items)
+        self.build_launcher()
+
+    def _remove_launcher(self, item: dict):
+        items = [it for it in self._launcher_items()
+                 if not (it is item or (it.get("path") == item.get("path") and it.get("name") == item.get("name")))]
+        cfg.set("launcher", items)
+        self.build_launcher()
+
+    def _launcher_menu(self, item: dict):
+        from .system import styled_menu
+        m = styled_menu(self)
+        open_a = m.addAction("打开")
+        open_a.triggered.connect(lambda: self._open(expand(item.get("path", "")), item.get("exe"), item.get("args")))
+        m.addSeparator()
+        rename_a = m.addAction("重命名…")
+        rename_a.triggered.connect(lambda: self._rename_launcher(item))
+        remove_a = m.addAction("从启动器移除")
+        remove_a.triggered.connect(lambda: self._remove_launcher(item))
+        if self.island:
+            self.island.locks.add("menu")
+            m.aboutToHide.connect(lambda: self.island.locks.discard("menu"))
+        m.popup(QtGui.QCursor.pos())
 
     def _open(self, path, exe=None, args=None):
         res = self.ctx.windows.open_or_focus(path, exe, args)
@@ -582,11 +677,15 @@ class AppTile(Hoverable):
         p.drawRoundedRect(r, 18, 18)
         col = KIND_COLORS.get(self.kind, KIND_COLORS["other"])
         cr = QtCore.QRectF(r.x() + 12, r.y() + 12, 30, 30)
-        p.setBrush(col)
-        p.drawEllipse(cr)
-        p.setFont(icon_font(14))
-        p.setPen(QtGui.QColor("white"))
-        p.drawText(cr, Qt.AlignmentFlag.AlignCenter, self.glyph)
+        pm = kind_pixmap(self.kind)
+        if pm is not None:
+            paint_icon_chip(p, cr, pm)
+        else:
+            p.setBrush(col)
+            p.drawEllipse(cr)
+            p.setFont(icon_font(14))
+            p.setPen(QtGui.QColor("white"))
+            p.drawText(cr, Qt.AlignmentFlag.AlignCenter, self.glyph)
         p.setFont(ui_font(13, W.DemiBold))
         p.setPen(theme.text())
         p.drawText(QtCore.QRectF(cr.right() + 8, cr.y(), 120, 30), Qt.AlignmentFlag.AlignVCenter, self.name)
@@ -621,14 +720,18 @@ class HistoryList(QtWidgets.QWidget, Themed):
             return
         for i, r in enumerate(self.rows):
             y = i * 30
-            col = KIND_COLORS.get(r.get("kind"), KIND_COLORS["other"])
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(col)
-            p.drawEllipse(QtCore.QPointF(10, y + 15), 4, 4)
+            kind = r.get("kind")
+            col = KIND_COLORS.get(kind, KIND_COLORS["other"])
+            pm = kind_pixmap(kind)
+            if pm is not None:
+                paint_icon_chip(p, QtCore.QRectF(3, y + 6, 18, 18), pm)
+            else:
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(col)
+                p.drawEllipse(QtCore.QPointF(10, y + 15), 4, 4)
             p.setFont(ui_font(12.5, W.Medium))
             p.setPen(theme.text())
             p.drawText(QtCore.QRectF(24, y, 80, 30), Qt.AlignmentFlag.AlignVCenter, r.get("name", ""))
-            kind = r.get("kind")
             body = r.get("body")
             if body:
                 desc = f"{r['sender']}：{body}" if r.get("sender") else body

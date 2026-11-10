@@ -423,15 +423,72 @@ class NotifyService(QtCore.QObject):
         self.counts_changed.emit(dict(self.counts))
 
     def open(self, kind: str):
-        path = cfg.get(f"notify.open.{kind}") or next(
-            (exe for exe, m in (cfg.get("notify.flash_processes") or {}).items() if m.get("kind") == kind), "")
-        if path:
-            opener = getattr(self, "opener", None)     # app.py 注入：已打开则切换窗口
+        target = str(cfg.get(f"notify.open.{kind}") or "").strip()
+        if not target:
+            latest = next((h for h in self.history
+                           if h.get("kind") == kind and (h.get("exe") or h.get("open"))), None)
+            if latest:
+                target = str(latest.get("exe") or latest.get("open") or "").strip()
+        if not target:
+            target = next((exe for exe, m in (cfg.get("notify.flash_processes") or {}).items()
+                           if m.get("kind") == kind), "")
+        opener = getattr(self, "opener", None)     # app.py 注入：已打开则切换窗口
+        res = ""
+        if target:
             if opener is not None:
-                opener(expand(path))
+                res = opener(expand(target))
             else:
-                launch(expand(path))
+                res = "launched" if launch(expand(target)) else "failed"
+        if kind == "mail" and res != "focused":
+            self._open_mail(target)
         self.clear(kind)
+
+    @staticmethod
+    def _open_mail(target: str = "") -> bool:
+        """邮件客户端兜底：先走已知安装路径，再试 Outlook 协议。
+
+        新版 Outlook 的 olk.exe 常常只有 WindowsApps 别名，直接 Popen("olk.exe")
+        不一定能找到；经典 Outlook 也不一定在 PATH 里，所以这里补常见路径。
+        """
+        target = os.path.basename(target).lower()
+        order = ([target] if target else []) + [e for e in
+                 ("olk.exe", "outlook.exe", "hxoutlook.exe", "thunderbird.exe")
+                 if e != target]
+        known = {
+            "olk.exe": [
+                os.path.expandvars(r"%LocalAppData%\Microsoft\WindowsApps\olk.exe"),
+                os.path.expandvars(r"%ProgramFiles%\WindowsApps\olk.exe"),
+            ],
+            "outlook.exe": [
+                os.path.expandvars(r"%ProgramFiles%\Microsoft Office\root\Office16\OUTLOOK.EXE"),
+                os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft Office\root\Office16\OUTLOOK.EXE"),
+                os.path.expandvars(r"%LocalAppData%\Microsoft\WindowsApps\outlook.exe"),
+            ],
+            "thunderbird.exe": [
+                os.path.expandvars(r"%ProgramFiles%\Mozilla Thunderbird\thunderbird.exe"),
+                os.path.expandvars(r"%ProgramFiles(x86)%\Mozilla Thunderbird\thunderbird.exe"),
+            ],
+            "hxoutlook.exe": [
+                os.path.expandvars(r"%LocalAppData%\Microsoft\WindowsApps\hxoutlook.exe"),
+            ],
+        }
+        for exe in order:
+            for p in known.get(exe, []):
+                if not os.path.exists(p):
+                    continue
+                if launch(p):
+                    return True
+                try:
+                    os.startfile(p)  # noqa: S606  WindowsApps 的别名用 startfile 更稳
+                    return True
+                except Exception:  # noqa: BLE001
+                    pass
+        # 最后才走协议；outlook: 由 Outlook 注册，mailto: 作为兜底
+        for proto in ("outlook:", "mailto:"):
+            if launch(proto):
+                return True
+        return False
+
 
     def on_flash(self, hwnd: int):
         try:
@@ -445,7 +502,8 @@ class NotifyService(QtCore.QObject):
             now = time.time()
             if now - self._last_by_kind.get(kind, 0) < FLASH_DEDUPE_S:
                 return
-            self._emit({"kind": kind, "name": m.get("name", kind), "source": "flash", "time": now})
+            self._emit({"kind": kind, "name": m.get("name", kind), "source": "flash",
+                        "exe": exe, "time": now})
         except Exception:  # noqa: BLE001
             pass
 
@@ -530,7 +588,7 @@ class NotifyService(QtCore.QObject):
         if now - self._popup_last.get(kind, 0) < POPUP_DEDUPE_S:
             return            # 同一个浮窗换句柄重建时只算一条消息
         self._popup_last[kind] = now
-        d = {"kind": kind, "name": m.get("name", kind), "source": "popup", "time": now}
+        d = {"kind": kind, "name": m.get("name", kind), "source": "popup", "exe": exe, "time": now}
         if kind in body_preview_kinds():
             # 浮窗里的发送者 / 正文用 UI Automation 读；读不到就只提醒「新消息」
             run_bg(popup_text, hwnd,
@@ -649,7 +707,7 @@ class NotifyService(QtCore.QObject):
                     continue
                 kind = m.get("kind", "other")
                 d = {"kind": kind, "name": m.get("name", kind), "source": "toast",
-                     "time": filetime_to_epoch(arrival)}
+                     "open": m.get("open", ""), "time": filetime_to_epoch(arrival)}
                 texts = toast_texts(payload)
                 if texts and kind in ("qq", "wechat", "feishu", "dingtalk"):
                     if len(texts) > 1 or kind not in body_kinds:
@@ -714,4 +772,5 @@ class NotifyService(QtCore.QObject):
         grew = any(path in prev and size > prev[path][0] for path, (size, _m) in st.items())
         if grew and time.time() - self._last_mail_toast > MAIL_TOAST_GRACE_S:
             m = (cfg.get("notify.toast_apps") or {}).get("ThunderbirdToast") or {}
-            self._emit({"kind": "mail", "name": m.get("name", "邮件"), "source": "file", "time": time.time()})
+            self._emit({"kind": "mail", "name": m.get("name", "邮件"), "source": "file",
+                        "open": "thunderbird.exe", "time": time.time()})

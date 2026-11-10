@@ -83,7 +83,7 @@ def parse_open_meteo(j: dict) -> dict:
                              "min": (daily.get("temperature_2m_min") or [None])[i],
                              "max": (daily.get("temperature_2m_max") or [None])[i], "icon": dicon})
     return out
-NO_KEY_MSG = "未设置 OpenWeather API Key（config.json → weather.api_key）"
+NO_KEY_MSG = "未设置 OpenWeather API Key（右键 → 设置… → 天气）"
 
 FLUENT_FONT = "Segoe Fluent Icons"
 SYMBOL_FONT = "Segoe UI Symbol"

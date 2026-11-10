@@ -154,8 +154,7 @@ class ControlsPage(Page):
     def set_radio(self, d: dict):
         self._radio = d
         self.wifi.set_state(bool(d.get("wifi_on")),
-                            (d.get("wifi_ssid") or ("已开启" if d.get("wifi_on") else "已关闭"))
-                            + (f" · {d['wifi_signal']}%" if d.get("wifi_signal") and d.get("wifi_ssid") else ""),
+                            "已开启" if d.get("wifi_on") else "已关闭",
                             d.get("wifi_available", True))
         bt_ok = d.get("bt_available", True)
         self.bt.set_state(bool(d.get("bt_on")),

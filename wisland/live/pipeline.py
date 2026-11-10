@@ -184,7 +184,7 @@ class Pipeline(QtCore.QThread):
         engine = "parakeet"
         cloud = {}
         if not FinalASR.available(engine):
-            raise FileNotFoundError("日语识别模型不完整，请重新安装软件")
+            raise FileNotFoundError("日语识别模型不完整，请在实时字幕页重新下载")
         final_threads = int(cfg.get("asr.final_threads", 6))
         # 1) 实时出字：用唯一模型滚动识别
         want_mode = str(cfg.get("asr.draft_mode", "rolling"))
@@ -202,7 +202,7 @@ class Pipeline(QtCore.QThread):
 
         vad_path = MODELS / "silero_vad.onnx"
         if not vad_path.exists():
-            raise FileNotFoundError("缺少 silero_vad.onnx，请先运行 scripts/download_models.py")
+            raise FileNotFoundError("缺少 silero_vad.onnx，请在实时字幕页重新下载模型")
         vcfg = sherpa_onnx.VadModelConfig()
         vcfg.silero_vad.model = str(vad_path)
         vcfg.silero_vad.window_size = self._vad_window

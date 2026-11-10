@@ -238,7 +238,7 @@ class Island(QtWidgets.QWidget):
         self.scr: QtGui.QScreen = self._pick_screen()
         self.mode = "anchored"
         self.expanded = False
-        cw, ch = self.compact.size_hint()
+        cw, ch = self.compact.size_hint(vertical=self.edge in ("left", "right"))
         self.sw = Spring(cw, 300, 0.62, 0.2)
         self.sh = Spring(ch, 300, 0.62, 0.2)
         self.fx = Spring(0, 900, 0.78, 0.2)
@@ -255,6 +255,9 @@ class Island(QtWidgets.QWidget):
         self._t0 = time.perf_counter()
         self._last = self._t0
         self._last_cap = 0.0
+        self._breath_color = QtGui.QColor(255, 255, 255)
+        self._breath_t0 = 0.0
+        self._breath_t1 = 0.0
         self._win_origin = QtCore.QPoint(0, 0)
         self.path = QtGui.QPainterPath()
         self.body = QtCore.QRectF()
@@ -368,7 +371,7 @@ class Island(QtWidgets.QWidget):
             pg = self.pages[self.stack.currentIndex()]
             h = PAD - 2 + NAV_H + 8 + pg.preferred_height() + PAD
             return EXP_W, h
-        return self.compact.size_hint()
+        return self.compact.size_hint(vertical=self.edge in ("left", "right"))
 
     def expand(self, page: str | None = None):
         if self.mode != "anchored" or self._fs_hidden:
@@ -495,6 +498,15 @@ class Island(QtWidgets.QWidget):
         self.compact.show_activity(act, duration)
         self._kick()
 
+    def breath(self, color, duration: float = 5.0):
+        """新消息呼吸灯：沿吸附边亮起，持续 duration 秒后自动消失。"""
+        self._breath_color = QtGui.QColor(color)
+        now = time.perf_counter()
+        self._breath_t0 = now
+        self._breath_t1 = now + max(0.2, float(duration))
+        self._kick()
+        self.update()
+
     def _set_content_opacity(self, a: float):
         """不再使用 QGraphicsOpacityEffect：在透明分层窗口里，带效果的子控件会单独重绘，
         偶尔出现"有内容、没有玻璃底"的帧。内容改为：形状长到约 70% 后直接显示（被形状裁剪），收起时立即隐藏。"""
@@ -518,7 +530,7 @@ class Island(QtWidgets.QWidget):
             # 收成胶囊，中心向鼠标靠拢
             c = QtCore.QPointF(gpos)
         self.compact_a.to(1, 500, 1.0)
-        cw, ch = self.compact.size_hint()
+        cw, ch = self.compact.size_hint(vertical=self.edge in ("left", "right"))
         self.sw.to(cw, 300, 0.55)
         self.sh.to(ch, 300, 0.55)
         self.mode = "drag"
@@ -585,6 +597,8 @@ class Island(QtWidgets.QWidget):
             self.timer.start()
 
     def _needs_frames(self) -> bool:
+        if time.perf_counter() < self._breath_t1:
+            return True
         if self.mode != "anchored" or self.drips or self._bd_prev is not None:
             return True
         for s in (self.sw, self.sh, self.content_a, self.compact_a, self.neck_s):
@@ -607,7 +621,7 @@ class Island(QtWidgets.QWidget):
                 self.fx.to(cp.x())
                 self.fy.to(cp.y())
         if not self.expanded:
-            cw, ch = self.compact.size_hint()
+            cw, ch = self.compact.size_hint(vertical=self.edge in ("left", "right"))
             if abs(self.sw.target - cw) > 0.5 or abs(self.sh.target - ch) > 0.5:
                 if self.content_a.x < 0.12:
                     self.sw.to(cw, 460, 0.64)
@@ -1005,6 +1019,7 @@ class Island(QtWidgets.QWidget):
         rg.setColorAt(0, theme.rim_top())
         rg.setColorAt(1, theme.rim_bottom())
         p.strokePath(path, QtGui.QPen(QtGui.QBrush(rg), 1.0))
+        self._paint_breath(p, path, bb)
         self._paint_rest(p, path, bb)
 
     def _paint_glass(self, p: QtGui.QPainter, path: QtGui.QPainterPath, crossfade: bool = True):
@@ -1040,6 +1055,72 @@ class Island(QtWidgets.QWidget):
         g.setColorAt(1, QtGui.QColor(255, 255, 255, 10))
         p.fillPath(path, g)
 
+    def _paint_breath(self, p: QtGui.QPainter, path: QtGui.QPainterPath, bb: QtCore.QRectF):
+        """新消息呼吸灯：贴着屏幕的吸附边一呼一吸，5 秒后自动淡出。"""
+        now = time.perf_counter()
+        if now >= self._breath_t1:
+            return
+        elapsed = max(0.0, now - self._breath_t0)
+        remain = max(0.0, self._breath_t1 - now)
+        env = min(1.0, elapsed / 0.35, remain / 0.7)
+        if env <= 0.01:
+            return
+        wave = 0.5 - 0.5 * math.cos(elapsed * math.tau * 1.6)
+        alpha = env * (0.24 + 0.72 * wave)
+        if alpha <= 0.01:
+            return
+        col = QtGui.QColor(self._breath_color)
+        edge = self.edge
+        horiz = edge in ("top", "bottom")
+        short = bb.height() if horiz else bb.width()
+        band = min(16.0, max(6.0, short * 0.55))
+        if edge == "top":
+            rect = QtCore.QRectF(bb.left(), bb.top(), bb.width(), band)
+            grad = QtGui.QLinearGradient(0, bb.top(), 0, bb.top() + band)
+        elif edge == "bottom":
+            rect = QtCore.QRectF(bb.left(), bb.bottom() - band, bb.width(), band)
+            grad = QtGui.QLinearGradient(0, bb.bottom(), 0, bb.bottom() - band)
+        elif edge == "left":
+            rect = QtCore.QRectF(bb.left(), bb.top(), band, bb.height())
+            grad = QtGui.QLinearGradient(bb.left(), 0, bb.left() + band, 0)
+        else:
+            rect = QtCore.QRectF(bb.right() - band, bb.top(), band, bb.height())
+            grad = QtGui.QLinearGradient(bb.right(), 0, bb.right() - band, 0)
+        c0 = QtGui.QColor(col)
+        c0.setAlphaF(min(1.0, alpha * 0.95))
+        c1 = QtGui.QColor(col)
+        c1.setAlphaF(0.0)
+        grad.setColorAt(0, c0)
+        grad.setColorAt(1, c1)
+        p.save()
+        p.setClipPath(path)
+        p.fillRect(rect, grad)
+        # 贴边的一根亮线，呼吸时更明显
+        lc = QtGui.QColor(col)
+        lc.setAlphaF(min(1.0, alpha * 1.25))
+        p.setPen(QtGui.QPen(lc, 2.0))
+        if edge == "top":
+            m = min(28.0, bb.width() * 0.18)
+            if bb.width() > 2 * m:
+                p.drawLine(QtCore.QPointF(bb.left() + m, bb.top() + 1.2),
+                           QtCore.QPointF(bb.right() - m, bb.top() + 1.2))
+        elif edge == "bottom":
+            m = min(28.0, bb.width() * 0.18)
+            if bb.width() > 2 * m:
+                p.drawLine(QtCore.QPointF(bb.left() + m, bb.bottom() - 1.2),
+                           QtCore.QPointF(bb.right() - m, bb.bottom() - 1.2))
+        elif edge == "left":
+            m = min(28.0, bb.height() * 0.18)
+            if bb.height() > 2 * m:
+                p.drawLine(QtCore.QPointF(bb.left() + 1.2, bb.top() + m),
+                           QtCore.QPointF(bb.left() + 1.2, bb.bottom() - m))
+        else:
+            m = min(28.0, bb.height() * 0.18)
+            if bb.height() > 2 * m:
+                p.drawLine(QtCore.QPointF(bb.right() - 1.2, bb.top() + m),
+                           QtCore.QPointF(bb.right() - 1.2, bb.bottom() - m))
+        p.restore()
+
     def _paint_rest(self, p: QtGui.QPainter, path: QtGui.QPainterPath, bb: QtCore.QRectF):
         # 5) 常态动画：沿边缘缓慢游走的流光
         t = time.perf_counter() - self._t0
@@ -1066,7 +1147,8 @@ class Island(QtWidgets.QWidget):
             self.compact.squash = ((1 + 0.05 * pk, 1 - 0.16 * pk) if horiz else (1 - 0.16 * pk, 1 + 0.05 * pk))
             p.save()
             p.setClipPath(path)               # 内容（含表情）不超出灵动岛
-            self.compact.paint(p, bb, self.compact_a.x, self.peak_fn() if self.compact.mode() == "media" else 0.0)
+            self.compact.paint(p, bb, self.compact_a.x, self.peak_fn() if self.compact.mode() == "media" else 0.0,
+                               vertical=self.edge in ("left", "right"))
             p.restore()
         p.end()
 
@@ -1239,6 +1321,28 @@ class Island(QtWidgets.QWidget):
         exclude_from_capture(hwnd, not visible)
         self.backdrop.hwnd = hwnd
         self.backdrop.self_exclude = visible
+
+    def apply_layout_settings(self):
+        """设置窗口改了吸附边 / 位置 / 显示器后重新吸附，不需要重启。"""
+        edge = cfg.get("island.edge", "top")
+        if edge not in ("top", "bottom", "left", "right"):
+            edge = "top"
+        screens = QtGui.QGuiApplication.screens()
+        i = int(cfg.get("island.screen", 0) or 0)
+        scr = screens[i] if 0 <= i < len(screens) else QtGui.QGuiApplication.primaryScreen()
+        try:
+            pos = clamp(float(cfg.get("island.pos", 0.5)), 0.0, 1.0)
+        except (TypeError, ValueError):
+            pos = 0.5
+        if edge == self.edge and scr is self.scr and abs(pos - self.pos_frac) < 1e-4:
+            return
+        self.edge = edge
+        self.scr = scr
+        self.pos_frac = pos
+        self.neck_edge = edge
+        self.mode = "anchored"
+        self._place_nav()
+        self._kick()
 
     def expand_mode(self) -> str:
         m = cfg.get("island.expand_mode")

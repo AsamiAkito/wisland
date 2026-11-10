@@ -14,23 +14,7 @@ from ctypes import wintypes as W
 
 from PySide6 import QtCore, QtGui
 
-from wisland.core.bg import launch, run_hidden, ui
-
-
-def _decode(data: bytes) -> str:
-    """netsh 等命令输出：先试 UTF-8，再按 OEM 代码页（中文系统为 cp936）。"""
-    if not data:
-        return ""
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        pass
-    for enc in (f"cp{ctypes.windll.kernel32.GetOEMCP()}", "mbcs", "gbk"):
-        try:
-            return data.decode(enc)
-        except Exception:  # noqa: BLE001
-            continue
-    return data.decode("utf-8", "replace")
+from wisland.core.bg import launch, ui
 
 
 # ======================================================================
@@ -49,8 +33,11 @@ except Exception:  # noqa: BLE001
 
 
 class RadioService(QtCore.QObject):
-    """changed(dict): {wifi_on, wifi_ssid, wifi_signal(int % 或 None), bt_on,
-    wifi_available, bt_available}"""
+    """changed(dict): {wifi_on, bt_on, wifi_available, bt_available}
+
+    只读无线电的开 / 关状态；不读取 Wi-Fi 名称或信号强度。
+    Windows 11 24H2 起读取 SSID 会被算作访问位置，任务栏位置图标会反复闪烁。
+    """
 
     changed = QtCore.Signal(dict)
     POLL_S = 5.0
@@ -58,8 +45,8 @@ class RadioService(QtCore.QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         ui(lambda: None)
-        self.state: dict = {"wifi_on": False, "wifi_ssid": "", "wifi_signal": None,
-                            "bt_on": False, "wifi_available": False, "bt_available": False}
+        self.state: dict = {"wifi_on": False, "bt_on": False,
+                            "wifi_available": False, "bt_available": False}
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -150,39 +137,10 @@ class RadioService(QtCore.QObject):
                     st["bt_on"] = st["bt_on"] or on
         except Exception:  # noqa: BLE001
             traceback.print_exc()
-        ssid, sig = "", None
-        if st["wifi_on"] or not st["wifi_available"]:
-            ssid, sig, iface = await asyncio.get_running_loop().run_in_executor(None, self._netsh)
-            if iface and not st["wifi_available"]:
-                st["wifi_available"] = True
-                st["wifi_on"] = True
-        st["wifi_ssid"], st["wifi_signal"] = ssid, sig
         self.state = st
         if st != self._last_emit:
             self._last_emit = dict(st)
             self.changed.emit(dict(st))
-
-    @staticmethod
-    def _netsh():
-        """-> (ssid, signal%, has_interface)"""
-        try:
-            r = run_hidden(["netsh", "wlan", "show", "interfaces"], timeout=5)
-            text = _decode(r.stdout)
-        except Exception:  # noqa: BLE001
-            return "", None, False
-        ssid, sig, iface = "", None, False
-        for line in text.splitlines():
-            parts = re.split(r"\s*[:：]\s*", line.strip(), maxsplit=1)
-            if len(parts) != 2:
-                continue
-            key, val = parts
-            if key.upper() == "GUID":
-                iface = True
-            if "SSID" in key.upper() and "BSSID" not in key.upper() and not ssid:
-                ssid = val.strip()
-            elif sig is None and re.fullmatch(r"\d{1,3}\s*%", val.strip()):
-                sig = int(val.strip().rstrip("%").strip())
-        return ssid, sig, iface
 
     def _set(self, kind: int, on: bool):
         loop = self._loop

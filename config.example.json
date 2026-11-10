@@ -27,6 +27,8 @@
     "auto_show": true,
     "lyrics": true,
     "netease_log": true,
+    "lyrics_sources": "netease,lrclib,custom",
+    "lyrics_custom_url": "",
     "priority": [
       "cloudmusic",
       "bilibili",
@@ -46,6 +48,11 @@
       "feishu",
       "dingtalk"
     ],
+    "popup": {
+      "enabled": true,
+      "position": "bottom_right",
+      "size": 100
+    },
     "toast_apps": {
       "QQ": {
         "name": "QQ",
@@ -57,23 +64,28 @@
       },
       "ThunderbirdToast": {
         "name": "邮件",
-        "kind": "mail"
+        "kind": "mail",
+        "open": "thunderbird.exe"
       },
       "microsoft.windowscommunicationsapps_8wekyb3d8bbwe!microsoft.windowslive.mail": {
         "name": "邮件",
-        "kind": "mail"
+        "kind": "mail",
+        "open": "hxoutlook.exe"
       },
       "Microsoft.OutlookForWindows": {
         "name": "邮件",
-        "kind": "mail"
+        "kind": "mail",
+        "open": "olk.exe"
       },
       "Microsoft.Outlook": {
         "name": "邮件",
-        "kind": "mail"
+        "kind": "mail",
+        "open": "outlook.exe"
       },
       "Outlook": {
         "name": "邮件",
-        "kind": "mail"
+        "kind": "mail",
+        "open": "outlook.exe"
       },
       "com.electron.Feishu": {
         "name": "飞书",
@@ -156,7 +168,8 @@
       "mail": "",
       "feishu": "",
       "dingtalk": ""
-    }
+    },
+    "open_seeded": false
   },
   "stocks": {
     "watchlist": [
@@ -251,7 +264,7 @@
   "launcher": [
     {
       "name": "文件资源管理器",
-      "path": "C:/Windows/explorer.exe"
+      "path": "%WINDIR%/explorer.exe"
     }
   ]
 }

@@ -50,8 +50,12 @@ DEFAULTS: dict = {
     },
     "media": {
         "auto_show": True,           # 开始播放时收起态自动切到音乐（暂停 8 秒后切回）
-        "lyrics": True,              # 收起态显示歌词（网易云公开歌词接口）
+        "lyrics": True,              # 收起态显示滚动歌词（网易云优先，失败回退 LRCLIB / 自定义源）
         "netease_log": True,         # 读取网易云本地日志获得播放状态与进度（网易云默认不接入系统媒体控件）
+        # 按顺序尝试的歌词源：netease / lrclib / custom；用英文逗号分隔
+        "lyrics_sources": "netease,lrclib,custom",
+        # 自定义歌词 API：URL 可用 {title} {artist} {album} {duration} {song_id} 占位
+        "lyrics_custom_url": "",
         "priority": ["cloudmusic", "bilibili", "chrome", "zen", "msedge", "firefox"],
     },
     "notify": {
@@ -60,16 +64,18 @@ DEFAULTS: dict = {
         # 弹出提醒时显示正文预览的模块。飞书 / 钉钉会从右下角通知浮窗读取发送人和正文；
         # 其他应用只有把通知写进 Windows 通知中心才有正文可读，任务栏闪烁只能拿到应用名。
         "body_preview": ["feishu", "dingtalk"],
+        # 新消息桌面提示框：可关闭；位置见 settings 里的六种；100 = 当前默认尺寸
+        "popup": {"enabled": True, "position": "bottom_right", "size": 100},
         # wpndatabase 中的 NotificationHandler.PrimaryId 前缀 -> 显示名 / 类型（不区分大小写）
         "toast_apps": {
             "QQ": {"name": "QQ", "kind": "qq"},
             "Weixin": {"name": "微信", "kind": "wechat"},
-            "ThunderbirdToast": {"name": "邮件", "kind": "mail"},
+            "ThunderbirdToast": {"name": "邮件", "kind": "mail", "open": "thunderbird.exe"},
             # Windows「邮件」应用 / 新版 Outlook / 经典 Outlook：自动识别它们的系统通知
-            "microsoft.windowscommunicationsapps_8wekyb3d8bbwe!microsoft.windowslive.mail": {"name": "邮件", "kind": "mail"},
-            "Microsoft.OutlookForWindows": {"name": "邮件", "kind": "mail"},
-            "Microsoft.Outlook": {"name": "邮件", "kind": "mail"},
-            "Outlook": {"name": "邮件", "kind": "mail"},
+            "microsoft.windowscommunicationsapps_8wekyb3d8bbwe!microsoft.windowslive.mail": {"name": "邮件", "kind": "mail", "open": "hxoutlook.exe"},
+            "Microsoft.OutlookForWindows": {"name": "邮件", "kind": "mail", "open": "olk.exe"},
+            "Microsoft.Outlook": {"name": "邮件", "kind": "mail", "open": "outlook.exe"},
+            "Outlook": {"name": "邮件", "kind": "mail", "open": "outlook.exe"},
             # 飞书 / 钉钉（Electron 应用的通知 AUMID 可能因版本不同而变化，这里多列几种常见值）
             "com.electron.Feishu": {"name": "飞书", "kind": "feishu"},
             "electron.app.Feishu": {"name": "飞书", "kind": "feishu"},
@@ -94,12 +100,13 @@ DEFAULTS: dict = {
             "dingtalk.exe": {"name": "钉钉", "kind": "dingtalk"},
         },
         "open": {
-            "qq": "",          # 例：C:/Program Files/Tencent/QQNT/QQ.exe
-            "wechat": "",      # 例：C:/Program Files/Tencent/Weixin/Weixin.exe
-            "mail": "",        # 例：C:/Program Files/Mozilla Thunderbird/thunderbird.exe
-            "feishu": "",      # 留空时按进程名查找已打开的飞书窗口
+            "qq": "",          # 首次启动会自动读取本地程序；可在这里改成自己的路径
+            "wechat": "",
+            "mail": "",
+            "feishu": "",
             "dingtalk": "",
         },
+        "open_seeded": False,  # 是否已经自动读取过本地程序路径
     },
     "stocks": {
         # 自选（腾讯财经代码：sh/sz/bj + 6 位，hk + 5 位，us + 代码）；也可在股票页点 + 搜索添加、右键删除
@@ -160,8 +167,8 @@ DEFAULTS: dict = {
         "source": "",
     },
     "clipboard": {"max": 10},      # 只保留最近 10 条（置顶的不计）
-    "launcher": [
-        {"name": "文件资源管理器", "path": "C:/Windows/explorer.exe"},
+    "launcher": [                   # 主页底部的应用启动器；可放任意文件
+        {"name": "文件资源管理器", "path": "%WINDIR%/explorer.exe"},
     ],
 }
 

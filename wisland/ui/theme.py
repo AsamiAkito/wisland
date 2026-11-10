@@ -274,4 +274,13 @@ KIND_COLORS = {
     "other": QtGui.QColor("#8e8e93"),
 }
 
+# 新消息呼吸灯用的浅色（比品牌色更亮，深色玻璃上更明显）
+KIND_LIGHT_COLORS = {
+    "qq": QtGui.QColor("#8fd3ff"),
+    "wechat": QtGui.QColor("#8ff0dd"),
+    "mail": QtGui.QColor("#ffc58a"),
+    "feishu": QtGui.QColor("#c9b8ff"),
+    "dingtalk": QtGui.QColor("#ffe08a"),
+}
+
 theme = Theme()
