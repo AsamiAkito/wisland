@@ -188,6 +188,16 @@ def parse(cur: dict, fc: dict | None) -> dict:
             d["icons"].append(icon)
         elif icon and not d["icons"]:
             d["icons"].append(icon)
+    # 当前天气里的 temp_min / temp_max 只是「此刻城市内各观测点的差异」，不是全天最低最高；
+    # 预报里今天又只剩还没过去的时段。两者合起来作为今天的最低 / 最高，左侧和右侧「今天」用同一组数。
+    today = datetime.now(tz).strftime("%Y-%m-%d")
+    if today in days:
+        d = days[today]
+        for v in (out["temp"], out["temp_min"], out["temp_max"]):
+            if v is not None:
+                d["min"] = v if d["min"] is None else min(d["min"], v)
+                d["max"] = v if d["max"] is None else max(d["max"], v)
+        out["temp_min"], out["temp_max"] = d["min"], d["max"]
     for key in order[:5]:
         d = days[key]
         icons = d["icons"]
