@@ -57,8 +57,8 @@ DEFAULTS: dict = {
     "notify": {
         # 消息页显示的模块：qq / wechat / mail / feishu / dingtalk（消息页点 + 可添加飞书、钉钉）
         "modules": ["qq", "wechat", "mail"],
-        # 弹出提醒时显示正文预览的模块。只有把通知写进 Windows 通知中心的应用才有正文可读；
-        # 任务栏闪烁只能拿到应用名，没有内容。
+        # 弹出提醒时显示正文预览的模块。飞书 / 钉钉会从右下角通知浮窗读取发送人和正文；
+        # 其他应用只有把通知写进 Windows 通知中心才有正文可读，任务栏闪烁只能拿到应用名。
         "body_preview": ["feishu", "dingtalk"],
         # wpndatabase 中的 NotificationHandler.PrimaryId 前缀 -> 显示名 / 类型（不区分大小写）
         "toast_apps": {
