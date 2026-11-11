@@ -12,12 +12,14 @@ _UNSET = object()
 _SYS_PROXY: object = _UNSET
 
 
-def system_proxy() -> str | None:
+def system_proxy(refresh: bool = False) -> str | None:
     """读 Windows 的「系统代理」（Clash / v2ray 之类），没有就返回 None。
 
-    有些机器上局域网直连 GitHub 很慢、开代理反而快很多，所以下载引擎时优先用它。
+    结果会缓存；传 refresh=True 可在直连失败后重新探测（代理可能是后来才开的）。
     """
     global _SYS_PROXY
+    if refresh:
+        _SYS_PROXY = _UNSET
     if _SYS_PROXY is _UNSET:
         value: str | None = None
         try:

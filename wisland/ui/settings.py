@@ -2340,9 +2340,12 @@ class SettingsWindow(QtWidgets.QWidget):
         f.number("weather.interval_min", "刷新间隔", "天气变化慢，不建议少于 5 分钟。",
                  5, 180, step=5, suffix="分钟")
         f.section("城市")
-        f.text("weather.city", "默认城市", "城市列表为空时使用；支持中文名（Open-Meteo 模式）。", width=230)
-        f.custom("weather.cities", "多城市",
-                 "第一个显示在收起态。坐标留空时按城市名自动查询；也可以在天气页点 + 搜索添加。",
+        f.text("weather.city", "默认城市",
+               "IP 定位失败时使用；定位成功时默认城市跟随公网 IP（天气页右键可绑定固定城市）。",
+               width=230)
+        f.custom("weather.cities", "城市列表",
+                 "这里是你自己添加的城市；默认城市始终显示在首位和收起态，绑定时当前 IP 城市仍作为"
+                 "第二项显示。坐标留空时按城市名自动查询；也可以在天气页点 + 搜索添加。",
                  RecordEditor(
                      cfg.get("weather.cities") or [],
                      [{"key": "name", "placeholder": "城市名，如 上海", "width": 170},

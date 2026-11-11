@@ -454,7 +454,7 @@ class WeatherPage(Page):
         self.chip_row.setContentsMargins(0, 0, 0, 0)
         self.add_btn = IconButton(G.ADD, 28, 12, "添加城市")
         self.add_btn.clicked.connect(self._start_add)
-        self.add_edit = LineEdit("城市名")
+        self.add_edit = LineEdit("城市名 / 纬度,经度")
         self.add_edit.setFixedWidth(220)
         self.add_edit.setFixedHeight(30)
         self.add_edit.hide()
@@ -515,9 +515,17 @@ class WeatherPage(Page):
                 c.right_clicked.connect(lambda i=i: self._menu(i))
                 self.chip_row.addWidget(c)
                 self.chips.append(c)
+        follows = self.ctx.weather.follows_network()
+        ip_idx = self.ctx.weather.ip_city_index()
         for c, d in zip(self.chips, data):
             c.default = c.idx == 0
             c.set_info(f"{round(d['temp'])}°" if d.get("temp") is not None else "--°", weather_glyph(d.get("icon")))
+            if c.idx == 0:
+                c.setToolTip("默认城市：跟随公网 IP" if follows else "主城市：已绑定（右键可取消）")
+            elif c.idx == ip_idx:
+                c.setToolTip("当前网络城市（跟随公网 IP）")
+            else:
+                c.setToolTip("右键 → 绑定主城市")
         self.sel = min(self.sel, max(0, len(data) - 1))
         self.select(self.sel)
 
@@ -565,19 +573,45 @@ class WeatherPage(Page):
     def _menu(self, i: int):
         from .system import styled_menu
         m = styled_menu(self)
-        if i > 0:
-            m.addAction("设为默认").triggered.connect(lambda: self._default(i))
-        a = m.addAction("删除该城市")
-        a.setEnabled(len(self.data) > 1)
-        a.triggered.connect(lambda: self._remove(i))
+        follows = self.ctx.weather.follows_network()
+        ip_idx = self.ctx.weather.ip_city_index()
+        if i == 0:
+            info = m.addAction("默认城市：跟随公网 IP" if follows else "主城市：已绑定")
+            info.setEnabled(False)
+            if follows:
+                a = m.addAction("绑定主城市（固定为当前城市）")
+                a.triggered.connect(lambda: self._bind(i))
+            else:
+                a = m.addAction("取消绑定（恢复跟随公网 IP）")
+                a.triggered.connect(lambda: self._unbind())
+        elif i == ip_idx:
+            info = m.addAction("当前网络城市（跟随公网 IP）")
+            info.setEnabled(False)
+            a = m.addAction("绑定主城市")
+            a.triggered.connect(lambda: self._bind(i))
+            u = m.addAction("取消绑定（恢复跟随公网 IP）")
+            u.triggered.connect(lambda: self._unbind())
+        else:
+            a = m.addAction("绑定主城市")
+            a.triggered.connect(lambda: self._bind(i))
+            if not follows:
+                u = m.addAction("取消绑定（恢复跟随公网 IP）")
+                u.triggered.connect(lambda: self._unbind())
+            m.addSeparator()
+            d = m.addAction("删除该城市")
+            d.triggered.connect(lambda: self._remove(i))
         if self.island:
             self.island.locks.add("menu")
             m.aboutToHide.connect(lambda: self.island.locks.discard("menu"))
         m.popup(QtGui.QCursor.pos())
 
-    def _default(self, i):
+    def _bind(self, i):
         self.sel = 0
-        self.ctx.weather.make_default(i)
+        self.ctx.weather.bind_main(i)
+
+    def _unbind(self):
+        self.sel = 0
+        self.ctx.weather.unbind_main()
 
     def _remove(self, i):
         if self.sel >= i and self.sel > 0:

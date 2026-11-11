@@ -196,7 +196,9 @@
     "units": "metric",
     "lang": "zh_cn",
     "interval_min": 15,
-    "cities": []
+    "cities": [],
+    "ip_city": null,
+    "pinned_city": null
   },
   "brightness": {
     "twinkle": ""

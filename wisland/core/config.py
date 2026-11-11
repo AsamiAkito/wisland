@@ -128,13 +128,16 @@ DEFAULTS: dict = {
     },
     "weather": {
         "api_key": "",         # 留空 = 使用 Open-Meteo（免费、无需 Key）；填 OpenWeather Key 则改用 OpenWeather
-        "city": "上海",
+        "city": "上海",         # IP 定位失败时的默认城市
         "lat": None,
         "lon": None,
         "units": "metric",
         "lang": "zh_cn",
         "interval_min": 15,
-        "cities": [],          # [{"name": "上海", "lat": 31.23, "lon": 121.47}]，第一个显示在收起态
+        # 用户自己添加的城市（不含跟随 IP 的默认城市）；默认城市显示在收起态和列表首位
+        "cities": [],          # [{"name": "上海", "lat": 31.23, "lon": 121.47}]
+        "ip_city": None,       # 上次按公网 IP 定位到的城市缓存，随网络变化自动更新
+        "pinned_city": None,   # 右键「绑定主城市」后固定显示的城市；None = 跟随 IP
     },
     "brightness": {"twinkle": ""},   # 留空 = 直接用 DDC/CI / WMI（便携版 Twinkle 每次调用都会弹"安装中"）
     "clash": {
