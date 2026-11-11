@@ -174,7 +174,7 @@ def main():
     ctx.windows.notice.connect(lambda t: ctx.island and ctx.island.activity({"glyph": _G().MESSAGE, "title": t}, 5.0))
     ctx.island = None
 
-    # 第一次打开时读取本地常见程序，填进「消息与邮件 → 打开应用」；之后保留用户修改。
+    # 每次启动读取本地常见程序，填进「消息与邮件 → 打开应用」中仍为空的项。
     try:
         seed_open_apps()
     except Exception as e:  # noqa: BLE001

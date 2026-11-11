@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
-"""本地程序路径：首次启动给「消息与邮件 → 打开应用」填入默认 exe。
+"""本地程序路径：每次启动给「消息与邮件 → 打开应用」的空路径填入默认 exe。
 
-只解析开始菜单快捷方式和常见安装位置；用户改过之后由 notify.open_seeded 标记，
-不会再次覆盖。
+只解析开始菜单快捷方式和常见安装位置；只填空白项，不覆盖用户已经填好的路径。
 """
 from __future__ import annotations
 
@@ -77,7 +76,10 @@ def _start_menu_targets() -> list[str]:
     if not roots:
         return []
     targets: list[str] = []
-    comtypes.CoInitialize()
+    try:
+        comtypes.CoInitialize()
+    except Exception:  # noqa: BLE001 - 线程已初始化 COM 时不要影响启动
+        return []
     try:
         shell = comtypes.client.CreateObject("WScript.Shell", dynamic=True)
         for root in roots:
@@ -89,23 +91,42 @@ def _start_menu_targets() -> list[str]:
                     continue
                 if target.lower().endswith(".exe") and os.path.isfile(target):
                     targets.append(target)
+    except Exception:  # noqa: BLE001 - 读开始菜单失败时退回常见安装位置
+        return []
     finally:
-        comtypes.CoUninitialize()
+        try:
+            comtypes.CoUninitialize()
+        except Exception:  # noqa: BLE001
+            pass
     return targets
 
 
-def detect_open_apps() -> dict[str, str]:
-    """返回能确认存在的本地程序路径；找不到的不放。"""
-    menu = _start_menu_targets()
+def detect_open_apps(kinds=None) -> dict[str, str]:
+    """返回能确认存在的本地程序路径；找不到的不放。kinds 为空时检测全部。"""
+    if kinds is None:
+        kinds = tuple(BASENAMES)
+    elif isinstance(kinds, str):
+        kinds = (kinds,)
+    else:
+        kinds = tuple(kinds)
     found: dict[str, str] = {}
-    for kind, names in BASENAMES.items():
+    missing: dict[str, tuple[str, ...]] = {}
+    for kind in kinds:
+        names = BASENAMES.get(kind)
+        if not names:
+            continue
         for raw in KNOWN.get(kind, ()):
             path = Path(expand(raw))
             if path.is_file():
                 found[kind] = path.as_posix()
                 break
-        if kind in found:
-            continue
+        else:
+            missing[kind] = names
+    if not missing:
+        return found
+    # 只有常见位置都没找到时才读开始菜单，避免每次启动都遍历快捷方式。
+    menu = _start_menu_targets()
+    for kind, names in missing.items():
         for target in menu:
             if Path(target).name.casefold() in names:
                 found[kind] = Path(target).as_posix()
@@ -113,29 +134,41 @@ def detect_open_apps() -> dict[str, str]:
     return found
 
 
+_SEED_ATTEMPTED = False
+
+
 def seed_open_apps() -> int:
-    """首次启动填充 notify.open 中仍为空的项；用户改过/清空后不再覆盖。"""
-    if bool(cfg.get("notify.open_seeded", False)):
+    """每次 wisland 启动时，为 notify.open 中仍为空的项检测一次。
+
+    只填空白项，不覆盖用户填写的路径；同一进程内只执行一次，避免重复读取。
+    这样关闭应用再打开、重启电脑后自启时都会重新检测。
+    """
+    global _SEED_ATTEMPTED
+    if _SEED_ATTEMPTED:
         return 0
-    try:
-        found = detect_open_apps()
-    except Exception as e:  # noqa: BLE001
-        print("[notify] 读取本地程序路径失败：", e)
-        return 0
+    _SEED_ATTEMPTED = True
     current = cfg.get("notify.open")
     if not isinstance(current, dict):
         current = {}
+    empty = [kind for kind in BASENAMES if not str(current.get(kind) or "").strip()]
+    # 所有路径都已填好时不需要读取任何本地程序。
+    if not empty:
+        return 0
+    try:
+        found = detect_open_apps(empty)
+    except Exception as e:  # noqa: BLE001
+        print("[notify] 读取本地程序路径失败：", e)
+        return 0
     added = 0
     for kind, path in found.items():
         if not str(current.get(kind) or "").strip():
             current[kind] = path
             added += 1
-    cfg.set("notify.open", current, save=False)
-    cfg.set("notify.open_seeded", True, save=False)
-    try:
-        cfg.save()
-    except OSError as e:
-        print("[notify] 保存本地程序路径失败：", e)
     if added:
+        try:
+            cfg.set("notify.open", current)
+        except OSError as e:
+            print("[notify] 保存本地程序路径失败：", e)
+            return 0
         print(f"[notify] 已自动配置 {added} 个打开应用路径")
     return added

@@ -101,14 +101,13 @@ DEFAULTS: dict = {
             "dingtalk.exe": {"name": "钉钉", "kind": "dingtalk"},
         },
         "open": {
-            "qq": "",          # 首次启动会自动读取本地程序；可在这里改成自己的路径
+            "qq": "",          # 留空时每次启动会自动检测本地程序；也可改成自己的路径
             "wechat": "",
             "mail": "",
             "feishu": "",
             "dingtalk": "",
             "dsh": "",
         },
-        "open_seeded": False,  # 是否已经自动读取过本地程序路径
     },
     "dsh": {
         # DeepSeek 桌面版（DSH）：只读会话日志，在一轮回答结束后提醒

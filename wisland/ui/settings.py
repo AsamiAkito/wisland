@@ -2292,7 +2292,8 @@ class SettingsWindow(QtWidgets.QWidget):
         for kind, label in KIND_OPTIONS:
             f.path(f"notify.open.{kind}", label, "", kind="file",
                    placeholder="程序路径（留空按消息来源打开）")
-        f.note("首次启动会自动读取本机常见程序路径并填入；也可以在这里改成其他路径或清空。"
+        f.note("每次打开 wisland 时都会自动读取本机常见程序路径，填入仍为空的项；已经填好的路径不会被覆盖。"
+               "关闭应用再打开、重启电脑后自启时都会重新检测。"
                "留空时优先按最近一条消息的来源应用打开（例如 Outlook / Thunderbird）；填了路径则优先启动它。")
 
         f.section("邮件检查")
