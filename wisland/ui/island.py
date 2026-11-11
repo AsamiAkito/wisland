@@ -40,6 +40,11 @@ BREAK = 64.0                     # 液桥拉断距离
 JOIN = 30.0                      # 靠近到这个距离时液桥伸出
 EDGE_MARGIN = 6
 
+# 新消息呼吸灯的光带剖面 (t, α)：t = 离吸附边的距离 / 光带厚度。
+# 最前面 7% 是贴着边的那根亮线，之后迅速衰减成余光，末端收到 0 —— 渐变到 0 才不会留下一条硬边。
+BREATH_STOPS = ((0.00, 1.00), (0.07, 0.92), (0.17, 0.55), (0.30, 0.26), (0.52, 0.09), (1.00, 0.00))
+BREATH_BAND = (0.55, 10.0, 34.0)  # 余光厚度：本体厚度 × 比例，再夹到 [最小, 最大] px
+
 GWL_EXSTYLE = -20
 WS_EX_NOACTIVATE = 0x08000000
 WS_EX_TRANSPARENT = 0x00000020
@@ -513,10 +518,15 @@ class Island(QtWidgets.QWidget):
         self._kick()
 
     def breath(self, color, duration: float = 5.0):
-        """新消息呼吸灯：沿吸附边亮起，持续 duration 秒后自动消失。"""
-        self._breath_color = QtGui.QColor(color)
+        """新消息呼吸灯：沿吸附边亮起，持续 duration 秒后自动消失。
+
+        灯还亮着时又来一条：保持当前的呼吸相位，只换成最新的颜色、把结束时间往后推。
+        不然每次都要重新淡入，连收几条消息时灯会先暗半拍再亮起，看着一闪一闪。
+        """
         now = time.perf_counter()
-        self._breath_t0 = now
+        self._breath_color = QtGui.QColor(color)
+        if now >= self._breath_t1:
+            self._breath_t0 = now
         self._breath_t1 = now + max(0.2, float(duration))
         self._kick()
         self.update()
@@ -1070,69 +1080,61 @@ class Island(QtWidgets.QWidget):
         p.fillPath(path, g)
 
     def _paint_breath(self, p: QtGui.QPainter, path: QtGui.QPainterPath, bb: QtCore.QRectF):
-        """新消息呼吸灯：贴着屏幕的吸附边一呼一吸，5 秒后自动淡出。"""
+        """新消息呼吸灯：贴着屏幕的吸附边一呼一吸，5 秒后自动淡出。
+
+        光要盖住"整个接触面"：吸附时贴边两侧还有表面张力外扩的液脚，只按胶囊本体铺，
+        两侧就会留下没被点亮的直角，看着像颜色没盖满。所以横向铺满形状的外接矩形、
+        纵向从吸附边往里迅速衰减 —— 贴边的亮线 + 余光都做在同一条渐变里，轮廓上没有硬边。
+        """
         now = time.perf_counter()
         if now >= self._breath_t1:
             return
         elapsed = max(0.0, now - self._breath_t0)
         remain = max(0.0, self._breath_t1 - now)
-        env = min(1.0, elapsed / 0.35, remain / 0.7)
+        env = smooth(elapsed / 0.45) * smooth(remain / 1.1)     # 起 / 收都慢一点，不会"啪"地亮灭
         if env <= 0.01:
             return
-        wave = 0.5 - 0.5 * math.cos(elapsed * math.tau * 1.6)
-        alpha = env * (0.24 + 0.72 * wave)
-        if alpha <= 0.01:
+        wave = 0.5 - 0.5 * math.cos(elapsed * math.tau * 0.5)   # 0.5Hz：一次呼吸约 2s，像呼吸不像心跳
+        k = env * (0.26 + 0.74 * wave)
+        if k <= 0.01:
             return
         col = QtGui.QColor(self._breath_color)
         edge = self.edge
         horiz = edge in ("top", "bottom")
-        short = bb.height() if horiz else bb.width()
-        band = min(16.0, max(6.0, short * 0.55))
+        shp = path.boundingRect()
+        depth = bb.height() if horiz else bb.width()
+        ratio, lo, hi = BREATH_BAND
+        band = clamp(depth * ratio, lo, hi)
+        # 纵向（离开吸附边）从本体边缘起算：贴边的一侧液桥会多冒出去 1.5px，那一条在屏幕外
+        # （或压在任务栏下），从形状边缘起算的话最亮的那一线正好被裁掉，剩下的余光就显得发灰。
+        # 横向则铺满形状的外接矩形，液脚也一起点亮，不然贴边两侧会留下没盖到的直角。
         if edge == "top":
-            rect = QtCore.QRectF(bb.left(), bb.top(), bb.width(), band)
-            grad = QtGui.QLinearGradient(0, bb.top(), 0, bb.top() + band)
+            line = bb.top()
+            y0 = min(shp.top(), line)
+            rect = QtCore.QRectF(shp.left(), y0, shp.width(), band + (line - y0))
+            grad = QtGui.QLinearGradient(0, line, 0, line + band)
         elif edge == "bottom":
-            rect = QtCore.QRectF(bb.left(), bb.bottom() - band, bb.width(), band)
-            grad = QtGui.QLinearGradient(0, bb.bottom(), 0, bb.bottom() - band)
+            line = bb.bottom()
+            y1 = max(shp.bottom(), line)
+            rect = QtCore.QRectF(shp.left(), line - band, shp.width(), band + (y1 - line))
+            grad = QtGui.QLinearGradient(0, line, 0, line - band)
         elif edge == "left":
-            rect = QtCore.QRectF(bb.left(), bb.top(), band, bb.height())
-            grad = QtGui.QLinearGradient(bb.left(), 0, bb.left() + band, 0)
+            line = bb.left()
+            x0 = min(shp.left(), line)
+            rect = QtCore.QRectF(x0, shp.top(), band + (line - x0), shp.height())
+            grad = QtGui.QLinearGradient(line, 0, line + band, 0)
         else:
-            rect = QtCore.QRectF(bb.right() - band, bb.top(), band, bb.height())
-            grad = QtGui.QLinearGradient(bb.right(), 0, bb.right() - band, 0)
-        c0 = QtGui.QColor(col)
-        c0.setAlphaF(min(1.0, alpha * 0.95))
-        c1 = QtGui.QColor(col)
-        c1.setAlphaF(0.0)
-        grad.setColorAt(0, c0)
-        grad.setColorAt(1, c1)
+            line = bb.right()
+            x1 = max(shp.right(), line)
+            rect = QtCore.QRectF(line - band, shp.top(), band + (x1 - line), shp.height())
+            grad = QtGui.QLinearGradient(line, 0, line - band, 0)
+        for t, af in BREATH_STOPS:
+            c = QtGui.QColor(col)
+            c.setAlphaF(min(1.0, k * af))
+            grad.setColorAt(t, c)
         p.save()
         p.setClipPath(path)
         p.fillRect(rect, grad)
-        # 贴边的一根亮线，呼吸时更明显
-        lc = QtGui.QColor(col)
-        lc.setAlphaF(min(1.0, alpha * 1.25))
-        p.setPen(QtGui.QPen(lc, 2.0))
-        if edge == "top":
-            m = min(28.0, bb.width() * 0.18)
-            if bb.width() > 2 * m:
-                p.drawLine(QtCore.QPointF(bb.left() + m, bb.top() + 1.2),
-                           QtCore.QPointF(bb.right() - m, bb.top() + 1.2))
-        elif edge == "bottom":
-            m = min(28.0, bb.width() * 0.18)
-            if bb.width() > 2 * m:
-                p.drawLine(QtCore.QPointF(bb.left() + m, bb.bottom() - 1.2),
-                           QtCore.QPointF(bb.right() - m, bb.bottom() - 1.2))
-        elif edge == "left":
-            m = min(28.0, bb.height() * 0.18)
-            if bb.height() > 2 * m:
-                p.drawLine(QtCore.QPointF(bb.left() + 1.2, bb.top() + m),
-                           QtCore.QPointF(bb.left() + 1.2, bb.bottom() - m))
-        else:
-            m = min(28.0, bb.height() * 0.18)
-            if bb.height() > 2 * m:
-                p.drawLine(QtCore.QPointF(bb.right() - 1.2, bb.top() + m),
-                           QtCore.QPointF(bb.right() - 1.2, bb.bottom() - m))
         p.restore()
 
     def _paint_rest(self, p: QtGui.QPainter, path: QtGui.QPainterPath, bb: QtCore.QRectF):
