@@ -25,8 +25,9 @@ MESSAGE_MODULES = {
     "mail": ("邮件", G.MAIL),
     "feishu": ("飞书", G.SEND),
     "dingtalk": ("钉钉", G.CONTACT),
+    "dsh": ("DeepSeek", G.CHAT),
 }
-DEFAULT_MODULES = ["qq", "wechat", "mail"]
+DEFAULT_MODULES = ["qq", "wechat", "mail", "dsh"]
 
 
 def module_info(kind: str) -> tuple[str, str]:

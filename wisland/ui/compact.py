@@ -22,7 +22,7 @@ H_ACT = 40
 H_SUB = 60          # 实时字幕：上日语、下中文两行
 SUB_HOLD_S = 7.0    # 最后一句字幕之后保留多久再回到原来的视图
 W_TEXT = 640        # 显示歌词 / 实时字幕时的胶囊宽度（约为普通收起态的 3 倍）
-BADGE_ORDER = ("mail", "wechat", "qq", "feishu", "dingtalk")
+BADGE_ORDER = ("mail", "wechat", "qq", "feishu", "dingtalk", "dsh")
 _PUNCT = set("，。！？、；：,.!?;:…")
 
 

@@ -45,7 +45,10 @@ SECTION_OPTIONS = [
 ]
 
 KIND_OPTIONS = [("qq", "QQ"), ("wechat", "微信"), ("mail", "邮件"),
-                ("feishu", "飞书"), ("dingtalk", "钉钉")]
+                ("feishu", "飞书"), ("dingtalk", "钉钉"), ("dsh", "DeepSeek")]
+# 正文预览只对读 toast 的来源有意义；DeepSeek 的正文来自会话日志，始终显示
+BODY_KIND_OPTIONS = [("qq", "QQ"), ("wechat", "微信"), ("mail", "邮件"),
+                     ("feishu", "飞书"), ("dingtalk", "钉钉")]
 
 # (key, 标题, 图标)
 PAGES = [
@@ -2259,7 +2262,22 @@ class SettingsWindow(QtWidgets.QWidget):
                 "消息页显示的模块；也可以在消息页点 + 添加。", KIND_OPTIONS)
         f.multi("notify.body_preview", "显示正文预览",
                 "飞书 / 钉钉可以从右下角通知浮窗读取发送人与正文；其他应用只有写进 Windows 通知中心才有正文。",
-                KIND_OPTIONS)
+                BODY_KIND_OPTIONS)
+
+        f.section("DeepSeek 桌面版")
+        f.switch("dsh.enabled", "读取 DeepSeek 桌面版完成通知",
+                 "直接读 DSH 的会话日志（%USERPROFILE%\\.dsh\\sessions），一轮回答结束、失败或被截断时提醒；不依赖 dsh-pet 的系统通知。")
+        f.switch("dsh.include_subagents", "同时提醒子任务",
+                 "子代理会话（delegationDepth > 0）也提醒；默认只看主会话。")
+        f.switch("dsh.skip_when_active", "正在看 DSH 时不提醒",
+                 "DeepSeek 窗口在前台时不弹提示框，避免和屏幕上的回答重复。")
+        f.number("dsh.body_chars", "正文预览长度",
+                 "从会话日志里取回答开头多少个字显示在弹窗里。", 40, 240, step=10, suffix="字")
+        f.path("dsh.sessions_dir", "会话目录",
+               "留空 = %USERPROFILE%\\.dsh\\sessions；一般不用改。", kind="dir",
+               placeholder="%USERPROFILE%\\.dsh\\sessions")
+        f.note("只读会话日志，不会修改 dsh-pet 或任何其它应用的设置；"
+               "如果同时装了 dsh-pet 并开着系统通知，两边会各提醒一次。")
 
         f.section("桌面弹窗")
         f.switch("notify.popup.enabled", "新消息弹出提示框",

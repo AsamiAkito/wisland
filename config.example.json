@@ -43,7 +43,8 @@
     "modules": [
       "qq",
       "wechat",
-      "mail"
+      "mail",
+      "dsh"
     ],
     "body_preview": [
       "feishu",
@@ -168,7 +169,8 @@
       "wechat": "",
       "mail": "",
       "feishu": "",
-      "dingtalk": ""
+      "dingtalk": "",
+      "dsh": ""
     },
     "open_seeded": false
   },
@@ -267,5 +269,12 @@
       "name": "文件资源管理器",
       "path": "%WINDIR%/explorer.exe"
     }
-  ]
+  ],
+  "dsh": {
+    "enabled": true,
+    "sessions_dir": "",
+    "include_subagents": false,
+    "skip_when_active": true,
+    "body_chars": 120
+  }
 }

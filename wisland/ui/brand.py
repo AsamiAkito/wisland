@@ -17,6 +17,7 @@ KIND_FILES = {
     "mail": "mail.png",
     "feishu": "feishu.png",
     "dingtalk": "dingtalk.png",
+    "dsh": "deepseek.png",
 }
 
 _CACHE: dict[str, QtGui.QPixmap] = {}

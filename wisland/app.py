@@ -129,6 +129,7 @@ def main():
     from .services.apps import seed_open_apps
     from .services.clash import ClashService
     from .services.clipboard import ClipboardService
+    from .services.dsh import DshService
     from .services.mailcheck import MailCheckService
     from .services.media import MediaService
     from .services.notify import NotifyService
@@ -156,6 +157,7 @@ def main():
     ctx.radio = RadioService()
     ctx.windows = WindowService()
     ctx.notify = NotifyService()
+    ctx.dsh = DshService()
     ctx.stocks = StockService()
     ctx.weather = WeatherService()
     ctx.clash = ClashService()
@@ -357,6 +359,7 @@ def main():
         island._kick()
     ctx.notify.notified.connect(on_notified)
     ctx.notify.counts_changed.connect(on_counts)
+    ctx.dsh.notified.connect(ctx.notify.publish)
     island.flash.connect(ctx.notify.on_flash)
     ctx.mailcheck.new_mail.connect(lambda user, n: ctx.notify._emit(
         {"kind": "mail", "name": "邮件", "source": "imap", "time": time.time()}))
@@ -644,7 +647,7 @@ def main():
 
     # ---------------- 启动 ----------------
     island.show()
-    for s in (ctx.media, ctx.audio, ctx.brightness, ctx.radio, ctx.windows, ctx.notify, ctx.stocks,
+    for s in (ctx.media, ctx.audio, ctx.brightness, ctx.radio, ctx.windows, ctx.notify, ctx.dsh, ctx.stocks,
               ctx.weather, ctx.clash, ctx.translate, ctx.clipboard, ctx.mailcheck, ctx.learn):
         try:
             if not hasattr(s, "start"):
@@ -658,7 +661,7 @@ def main():
 
     def shutdown():
         ctx.live.stop(wait=True)
-        for s in (ctx.media, ctx.audio, ctx.brightness, ctx.radio, ctx.notify, ctx.stocks,
+        for s in (ctx.media, ctx.audio, ctx.brightness, ctx.radio, ctx.notify, ctx.dsh, ctx.stocks,
                   ctx.weather, ctx.clash, ctx.translate, ctx.clipboard, ctx.mailcheck, ctx.learn):
             try:
                 s.stop()

@@ -60,8 +60,8 @@ DEFAULTS: dict = {
         "priority": ["cloudmusic", "bilibili", "chrome", "zen", "msedge", "firefox"],
     },
     "notify": {
-        # 消息页显示的模块：qq / wechat / mail / feishu / dingtalk（消息页点 + 可添加飞书、钉钉）
-        "modules": ["qq", "wechat", "mail"],
+        # 消息页显示的模块：qq / wechat / mail / feishu / dingtalk / dsh（消息页点 + 可添加飞书、钉钉）
+        "modules": ["qq", "wechat", "mail", "dsh"],
         # 弹出提醒时显示正文预览的模块。飞书 / 钉钉会从右下角通知浮窗读取发送人和正文；
         # 其他应用只有把通知写进 Windows 通知中心才有正文可读，任务栏闪烁只能拿到应用名。
         "body_preview": ["feishu", "dingtalk"],
@@ -106,8 +106,18 @@ DEFAULTS: dict = {
             "mail": "",
             "feishu": "",
             "dingtalk": "",
+            "dsh": "",
         },
         "open_seeded": False,  # 是否已经自动读取过本地程序路径
+    },
+    "dsh": {
+        # DeepSeek 桌面版（DSH）：只读会话日志，在一轮回答结束后提醒
+        "enabled": True,
+        # 留空 = %USERPROFILE%\.dsh\sessions
+        "sessions_dir": "",
+        "include_subagents": False,   # 子代理会话（delegationDepth > 0）默认不提醒
+        "skip_when_active": True,     # DSH 窗口在前台时不弹（和 dsh-pet 的系统通知一致）
+        "body_chars": 120,            # 正文预览长度
     },
     "stocks": {
         # 自选（腾讯财经代码：sh/sz/bj + 6 位，hk + 5 位，us + 代码）；也可在股票页点 + 搜索添加、右键删除

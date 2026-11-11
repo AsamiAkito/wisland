@@ -270,6 +270,7 @@ KIND_COLORS = {
     "mail": QtGui.QColor("#ff9f0a"),
     "feishu": QtGui.QColor("#00c2a8"),
     "dingtalk": QtGui.QColor("#1e9bff"),
+    "dsh": QtGui.QColor("#4d6bfe"),
     "stock": QtGui.QColor("#ff5a52"),
     "other": QtGui.QColor("#8e8e93"),
 }
@@ -281,6 +282,7 @@ KIND_LIGHT_COLORS = {
     "mail": QtGui.QColor("#ffc58a"),
     "feishu": QtGui.QColor("#c9b8ff"),
     "dingtalk": QtGui.QColor("#ffe08a"),
+    "dsh": QtGui.QColor("#b9c6ff"),
 }
 
 theme = Theme()

@@ -18,6 +18,7 @@ BASENAMES = {
     "feishu": ("feishu.exe", "lark.exe"),
     "dingtalk": ("dingtalk.exe",),
     "mail": ("olk.exe", "outlook.exe", "thunderbird.exe", "hxoutlook.exe"),
+    "dsh": ("deepseek harness.exe",),
 }
 
 KNOWN = {
@@ -52,6 +53,11 @@ KNOWN = {
         "%ProgramFiles(x86)%/Microsoft Office/root/Office16/OUTLOOK.EXE",
         "%ProgramFiles%/Mozilla Thunderbird/thunderbird.exe",
         "%ProgramFiles(x86)%/Mozilla Thunderbird/thunderbird.exe",
+    ),
+    "dsh": (
+        "%LocalAppData%/Programs/DeepSeek Harness/DeepSeek Harness.exe",
+        "%LocalAppData%/Programs/deepseek-harness/DeepSeek Harness.exe",
+        "%ProgramFiles%/DeepSeek Harness/DeepSeek Harness.exe",
     ),
 }
 

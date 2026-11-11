@@ -92,6 +92,24 @@ def body_preview_kinds() -> set:
     return set(DEFAULT_BODY_PREVIEW)
 
 
+# DeepSeek 桌面版没有配置打开路径时，按开始菜单 / 常见安装位置找一次（10 分钟内复用）
+_DSH_TARGET = {"path": "", "at": 0.0}
+
+
+def detect_dsh_target() -> str:
+    now = time.monotonic()
+    if _DSH_TARGET["at"] and now - _DSH_TARGET["at"] < 600:
+        return _DSH_TARGET["path"]
+    path = ""
+    try:
+        from .apps import detect_open_apps
+        path = str(detect_open_apps().get("dsh") or "")
+    except Exception:  # noqa: BLE001
+        path = ""
+    _DSH_TARGET["path"], _DSH_TARGET["at"] = path, now
+    return path
+
+
 # ---------------- hwnd -> exe ----------------
 
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -403,6 +421,10 @@ class NotifyService(QtCore.QObject):
         self._remove_popup_hook()
 
     # ---------- public ----------
+    def publish(self, d: dict):
+        """供其它事件源（DeepSeek 桌面版会话日志等）投递一条消息。"""
+        self._emit(d)
+
     def clear(self, kind: str):
         if self.counts.get(kind):
             self.counts[kind] = 0
@@ -432,6 +454,8 @@ class NotifyService(QtCore.QObject):
         if not target:
             target = next((exe for exe, m in (cfg.get("notify.flash_processes") or {}).items()
                            if m.get("kind") == kind), "")
+        if not target and kind == "dsh":
+            target = detect_dsh_target()
         opener = getattr(self, "opener", None)     # app.py 注入：已打开则切换窗口
         res = ""
         if target:
@@ -514,7 +538,7 @@ class NotifyService(QtCore.QObject):
         v = cfg.get("notify.modules")
         if isinstance(v, list):
             return {k for k in v if isinstance(k, str)}
-        return {"qq", "wechat", "mail"}
+        return {"qq", "wechat", "mail", "dsh"}
 
     @staticmethod
     def _popup_apps() -> dict:
