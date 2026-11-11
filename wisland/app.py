@@ -469,6 +469,7 @@ def main():
         media = box("media")
         return {
             "expand": mode,
+            "keep_on_top": bool(isl.get("keep_on_top", True)),
             "passthrough": bool(isl.get("passthrough", False)),
             "compact": isl.get("compact_view", "clock"),
             "mail": _sig([mail.get("interval_s"), mail.get("imap")]),
@@ -494,6 +495,8 @@ def main():
         island.apply_capture_mode()
         if now["expand"] != prev["expand"]:
             island.set_expand_mode(now["expand"])
+        if now["keep_on_top"] != prev["keep_on_top"]:
+            island.apply_keep_on_top()
         if now["passthrough"] != prev["passthrough"]:
             island.set_passthrough(now["passthrough"])
         if now["compact"] != prev["compact"]:

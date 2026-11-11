@@ -2184,6 +2184,8 @@ class SettingsWindow(QtWidgets.QWidget):
         ctrl = Select(opts, cur, 170)
         row = f._add_row(Row("显示器", "多显示器时选择灵动岛所在的那一块。", ctrl))
         f._bind(row, ctrl, "island.screen", ctrl.value, ctrl.set_value, 0)
+        f.switch("island.keep_on_top", "开启保持置顶",
+                 "开启后灵动岛始终显示在其他应用窗口前面，悬停展开时也不会被盖住；关闭后可以被其他窗口盖住。")
 
         f.section("主题与效果")
         f.choice("island.theme", "主题", "跟随背景自动切换，或固定一套配色。",

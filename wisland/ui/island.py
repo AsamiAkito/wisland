@@ -43,6 +43,12 @@ EDGE_MARGIN = 6
 GWL_EXSTYLE = -20
 WS_EX_NOACTIVATE = 0x08000000
 WS_EX_TRANSPARENT = 0x00000020
+WS_EX_TOPMOST = 0x00000008
+HWND_TOPMOST = -1
+HWND_NOTOPMOST = -2
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_NOACTIVATE = 0x0010
 WM_HOTKEY = 0x0312
 HSHELL_FLASH = 0x8006
 MOD = {"alt": 0x1, "ctrl": 0x2, "control": 0x2, "shift": 0x4, "win": 0x8}
@@ -52,6 +58,9 @@ user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
 user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
 user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
 user32.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+user32.SetWindowPos.restype = wintypes.BOOL
+user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND,
+                                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
 user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
 user32.GetWindowThreadProcessId.restype = wintypes.DWORD
 user32.GetForegroundWindow.restype = wintypes.HWND
@@ -214,8 +223,10 @@ class Island(QtWidgets.QWidget):
     play_pause_requested = QtCore.Signal()      # 收起态音乐视图的播放 / 暂停键
 
     def __init__(self, pages: list, peak_fn=None, visible_fn=None):
+        # 置顶由 apply_keep_on_top() / _raise_topmost() 通过 SetWindowPos 控制，
+        # 不再使用 WindowStaysOnTopHint：这样「开启保持置顶」关闭后，Qt 不会在显示 / 激活时把 TopMost 加回来。
         super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
-                         | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.NoDropShadowWindowHint)
+                         | Qt.WindowType.NoDropShadowWindowHint)
         self.setWindowTitle("wisland")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
@@ -308,6 +319,7 @@ class Island(QtWidgets.QWidget):
         self.timer.setInterval(16)
         self.timer.timeout.connect(self._tick)
         self.poll = QtCore.QTimer(self, interval=25, timeout=self._poll_hover)
+        self.topmost_timer = QtCore.QTimer(self, interval=500, timeout=self._ensure_topmost)
         self.lp_timer = QtCore.QTimer(self, singleShot=True, interval=420, timeout=self._long_press)
         self._click_timer = QtCore.QTimer(self, singleShot=True, timeout=self._single_click)
         self._dbl_filter = _BlankDoubleClick(self)
@@ -376,6 +388,8 @@ class Island(QtWidgets.QWidget):
     def expand(self, page: str | None = None):
         if self.mode != "anchored" or self._fs_hidden:
             return
+        # 悬停展开前先压到置顶层最前面：避免被其他置顶窗口盖住，只有点击后才浮上来
+        self._raise_topmost()
         if not self.expanded:
             # 打开时停留在上次收起前的页面（热键 / 托盘等指定了页面的除外）
             self.show_page(page or self._page_key)
@@ -1306,6 +1320,39 @@ class Island(QtWidgets.QWidget):
         else:
             self._rhook.remove()
 
+    # ---------------- 保持置顶 ----------------
+    def keep_on_top(self) -> bool:
+        return bool(cfg.get("island.keep_on_top", True))
+
+    def set_keep_on_top(self, on: bool):
+        cfg.set("island.keep_on_top", bool(on))
+        self.apply_keep_on_top()
+
+    def _set_topmost(self, on: bool):
+        """原生设置 / 取消 TopMost：会同时把它放到置顶层最前面，但不会抢焦点。"""
+        hwnd = int(self.winId())
+        user32.SetWindowPos(hwnd, HWND_TOPMOST if on else HWND_NOTOPMOST,
+                            0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+
+    def apply_keep_on_top(self):
+        """让窗口的 TopMost 状态与设置保持一致（设置窗口保存后调用）。"""
+        if self.isVisible():
+            self._set_topmost(self.keep_on_top())
+
+    def _raise_topmost(self):
+        """展开 / 重新显示时重新压到置顶层最前面，避免悬停展开被其他窗口盖住。"""
+        if self.keep_on_top():
+            self._set_topmost(True)
+
+    def _ensure_topmost(self):
+        """系统或别的程序偶尔会改掉置顶状态：定时校正，避免只有点击后才回到前面。"""
+        if not self.isVisible():
+            return
+        hwnd = int(self.winId())
+        actual = bool(user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST)
+        if actual != self.keep_on_top():
+            self._set_topmost(self.keep_on_top())
+
     def capture_visible(self) -> bool:
         return not bool(cfg.get("island.exclude_from_capture", False))
 
@@ -1429,6 +1476,9 @@ class Island(QtWidgets.QWidget):
         if not self._registered_hotkeys:
             self.register_hotkeys()
         self._apply_passthrough()
+        # 重新显示（例如全屏隐藏后）时恢复置顶；关闭置顶设置时不使用 WindowStaysOnTopHint，避免 Qt 自动加回来
+        self._set_topmost(self.keep_on_top())
+        self.topmost_timer.start()
         if self.pinned():
             QtCore.QTimer.singleShot(600, self.expand)
         self.poll.start()
@@ -1485,6 +1535,7 @@ class Island(QtWidgets.QWidget):
         except Exception:  # noqa: BLE001
             pass
         self.backdrop.stop()
+        self.topmost_timer.stop()
         self._rhook.remove()
         cfg.save()
         super().closeEvent(e)
