@@ -133,6 +133,8 @@ class G:
     EYE_OFF = "\uED1A"
     SEARCH = "\uE721"
     LIVE = "\uE720"   # 麦克风
+    INFO = "\uE946"
+    LINK = "\uE71B"
 
 
 def ui_font(px: float, weight: QtGui.QFont.Weight = QtGui.QFont.Weight.Normal, num: bool = False) -> QtGui.QFont:
@@ -317,6 +319,32 @@ class Theme(QtCore.QObject):
 
     def on_color(self) -> QtGui.QColor:
         return self._c("on")
+
+    def link(self) -> QtGui.QColor:
+        """链接 / 强调文字色：深色往白里提亮，浅色往黑里压深，保证玻璃底上的对比度。"""
+        base = self.on_color()
+        target = QtGui.QColor(255, 255, 255) if self.dark else QtGui.QColor(0, 0, 0)
+        k = 0.38 if self.dark else 0.27
+        color = QtGui.QColor(
+            round(base.red() + (target.red() - base.red()) * k),
+            round(base.green() + (target.green() - base.green()) * k),
+            round(base.blue() + (target.blue() - base.blue()) * k),
+        )
+        color.setAlphaF(base.alphaF())
+        return color
+
+    def ok(self) -> QtGui.QColor:
+        """成功状态色：浅色主题的默认绿色偏亮，压深一点再用于小字。"""
+        if self.dark:
+            return self.down()
+        return QtGui.QColor("#066b47")
+
+    def primary_fill(self) -> QtGui.QColor:
+        """主按钮填充：只有深色主题略微加深，提升白字对比度；其他主题保持原色。"""
+        base = self.on_color()
+        if self.pal_name == "dark":
+            base = base.darker(112)
+        return base
 
     def on_fg(self, a: float = 1.0) -> QtGui.QColor:
         c = QtGui.QColor(self.pal.get("on_fg", "#ffffff"))

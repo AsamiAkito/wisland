@@ -20,16 +20,23 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
 from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from .. import (APP_NAME, APP_NAME_CN, APP_TAGLINE, AUTHOR_NAME, AUTHOR_URL,
+                LICENSE_NAME, LICENSE_URL, ORIGINAL_AUTHOR_NAME, ORIGINAL_LICENSE_NAME,
+                ORIGINAL_LICENSE_URL, ORIGINAL_REPO_URL, REPO_URL,
+                __version__ as APP_VERSION)
+from ..core.bg import run_bg, ui as bg_ui
 from ..core.config import CONFIG_PATH, DATA_DIR, DEFAULTS, ROOT, cfg, expand
+from ..services import updater
 from .brand import asset_path
 from .popup import POPUP_POSITIONS
 from .theme import G, THEME_NAMES, W, icon_font, theme, ui_font
-from .widgets import Hoverable, IconButton, ScrollArea, Themed, painter
+from .widgets import Card, Hoverable, IconButton, ScrollArea, Themed, fmt_bytes, painter
 
 Qt = QtCore.Qt
 Signal = QtCore.Signal
@@ -63,6 +70,7 @@ PAGES = [
     ("launcher", "剪贴板与启动器", G.CLIP),
     ("system", "系统与控制", G.SLIDERS),
     ("advanced", "高级", G.GEAR),
+    ("about", "关于", G.INFO),
 ]
 
 WIN_W, WIN_H = 920, 660
@@ -110,9 +118,9 @@ def _role_color(role: str) -> QtGui.QColor:
         "title": theme.text(),
         "desc": theme.text2(),
         "hint": theme.text3(),
-        "accent": theme.on_color(),
+        "accent": theme.link(),
         "danger": theme.up(),
-        "ok": theme.down(),
+        "ok": theme.ok(),
     }.get(role, theme.text())
 
 
@@ -258,6 +266,20 @@ def _reveal(path: Path):
 
 def _open_path(path: Path):
     os.startfile(str(path))  # noqa: S606
+
+
+def _open_url(url: str) -> bool:
+    """用系统默认浏览器打开链接；QDesktopServices 失败时退回 Windows 的 os.startfile。"""
+    try:
+        if QtGui.QDesktopServices.openUrl(QtCore.QUrl(str(url))):
+            return True
+    except Exception:  # noqa: BLE001 - 某些环境没有桌面服务
+        pass
+    try:
+        os.startfile(str(url))  # noqa: S606
+        return True
+    except OSError:
+        return False
 
 
 # ==================================================================== 基础控件
@@ -818,6 +840,8 @@ class Button(Hoverable):
         self.setFixedHeight(height)
         self.setMinimumWidth(self._fit())
         self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName(text)
         self.clicked.connect(lambda: self.changed.emit())
 
     def _fit(self) -> int:
@@ -826,12 +850,25 @@ class Button(Hoverable):
 
     def set_text(self, t: str):
         self.text = t
+        self.setAccessibleName(t)
         self.setMinimumWidth(self._fit())
         self.update()
+
+    def set_variant(self, variant: str):
+        if variant != self.variant:
+            self.variant = variant
+            self.update()
 
     def refresh_fonts(self):
         self.setMinimumWidth(self._fit())
         self.update()
+
+    def keyPressEvent(self, e):
+        if e.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.clicked.emit()
+            e.accept()
+            return
+        super().keyPressEvent(e)
 
     def paintEvent(self, _e):
         p = painter(self)
@@ -843,7 +880,7 @@ class Button(Hoverable):
         rr = r.height() / 2
         if self.variant == "primary":
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(theme.on_color())
+            p.setBrush(theme.primary_fill())
             p.drawRoundedRect(r, rr, rr)
             if self._hover.x > 0.01:
                 c = QtGui.QColor(255, 255, 255, round(26 * self._hover.x))
@@ -860,6 +897,9 @@ class Button(Hoverable):
             p.setBrush(field_color())
             p.drawRoundedRect(r, rr, rr)
             fg = theme.text(0.92)
+        if not self.isEnabled():
+            fg = QtGui.QColor(fg)
+            fg.setAlphaF(fg.alphaF() * 0.35)
         p.setPen(fg)
         x = r.x() + 13
         if self.glyph:
@@ -869,6 +909,10 @@ class Button(Hoverable):
         p.setFont(ui_font(12.5, W.Medium))
         p.drawText(QtCore.QRectF(x, r.y(), r.right() - x - 10, r.height()),
                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.text)
+        if self.hasFocus():
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QtGui.QPen(theme.link(), 1))
+            p.drawRoundedRect(r.adjusted(1.5, 1.5, -1.5, -1.5), rr - 1.5, rr - 1.5)
 
 
 class Chip(Hoverable):
@@ -1703,7 +1747,8 @@ class Row(QtWidgets.QWidget, Themed):
                 lay.addWidget(control, 0, Qt.AlignmentFlag.AlignVCenter)
         if control is not None:
             try:
-                control.setAccessibleName(title)
+                if not control.accessibleName():
+                    control.setAccessibleName(title)
             except Exception:  # noqa: BLE001
                 pass
         self._hook_theme()
@@ -2033,24 +2078,41 @@ class Confirm(QtWidgets.QDialog):
                             | Qt.WindowType.NoDropShadowWindowHint)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.resize(400, 196)
+        width = 420
+        self.setFixedWidth(width)
+        text_width = width - 22 * 2
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(22, 20, 22, 16)
         lay.setSpacing(8)
-        lay.addWidget(TLabel(title, 16, W.DemiBold, "title", wrap=True))
-        body = TLabel(text, 12, W.Normal, "desc", wrap=True)
-        body.setMinimumHeight(40)
-        lay.addWidget(body, 1)
+
+        self.title_label = TLabel(title, 16, W.DemiBold, "title", wrap=True)
+        self.title_label.setFixedWidth(text_width)
+        title_h = self.title_label.heightForWidth(text_width)
+        if title_h <= 0:
+            title_h = self.title_label.sizeHint().height()
+        self.title_label.setMinimumHeight(title_h)
+        lay.addWidget(self.title_label)
+
+        self.body = TLabel(text, 12, W.Normal, "desc", wrap=True)
+        self.body.setFixedWidth(text_width)
+        body_h = max(40, self.body.heightForWidth(text_width))
+        self.body.setMinimumHeight(body_h)
+        lay.addWidget(self.body, 1)
+
         btns = QtWidgets.QHBoxLayout()
         btns.setSpacing(8)
-        cancel = Button("取消")
-        cancel.clicked.connect(self.reject)
-        ok = Button(ok_text, variant="danger" if danger else "primary")
-        ok.clicked.connect(self.accept)
+        self.cancel = Button("取消")
+        self.cancel.clicked.connect(self.reject)
+        self.ok = Button(ok_text, variant="danger" if danger else "primary")
+        self.ok.clicked.connect(self.accept)
         btns.addStretch(1)
-        btns.addWidget(cancel)
-        btns.addWidget(ok)
+        btns.addWidget(self.cancel)
+        btns.addWidget(self.ok)
         lay.addLayout(btns)
+
+        # 标题 + 正文按实际换行高度算窗口高度，长文案不会压住按钮。
+        content_h = 20 + 16 + title_h + body_h + 32 + 2 * 8
+        self.resize(width, max(196, content_h))
         if parent is not None:
             g = parent.frameGeometry()
             self.move(g.center() - self.rect().center())
@@ -2130,9 +2192,10 @@ class NavItem(Hoverable):
 
 
 class Logo(QtWidgets.QWidget, Themed):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, size: int = 40):
         super().__init__(parent)
-        self.setFixedSize(40, 40)
+        self._size = max(16, int(size))
+        self.setFixedSize(self._size, self._size)
         path = asset_path("logo.png")
         self._pm = QtGui.QPixmap(str(path)) if path is not None else QtGui.QPixmap()
         self._hook_theme()
@@ -2140,26 +2203,770 @@ class Logo(QtWidgets.QWidget, Themed):
     def paintEvent(self, _e):
         p = painter(self)
         r = QtCore.QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        radius = self._size * 0.275
         if not self._pm.isNull():
             path = QtGui.QPainterPath()
-            path.addRoundedRect(r, 11, 11)
+            path.addRoundedRect(r, radius, radius)
             p.save()
             p.setClipPath(path)
             p.drawPixmap(r, self._pm, QtCore.QRectF(self._pm.rect()))
             p.restore()
             p.setPen(QtGui.QPen(theme.text(0.14), 1))
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawRoundedRect(r, 11, 11)
+            p.drawRoundedRect(r, radius, radius)
             return
         c = theme.on_color()
         fill = QtGui.QColor(c)
         fill.setAlpha(38)
         p.setBrush(fill)
         p.setPen(QtGui.QPen(QtGui.QColor(c.red(), c.green(), c.blue(), 110), 1))
-        p.drawRoundedRect(r, 12, 12)
-        p.setFont(icon_font(19))
+        p.drawRoundedRect(r, radius, radius)
+        p.setFont(icon_font(self._size * 0.475))
         p.setPen(c)
         p.drawText(r, Qt.AlignmentFlag.AlignCenter, G.WINDOWS)
+
+
+class LinkText(Hoverable):
+    """主题色文字链接：悬停出现下划线，支持鼠标点击与键盘 Enter / Space。"""
+
+    def __init__(self, text: str, url: str = "", px: float = 12.5, parent=None):
+        super().__init__(parent)
+        self._text = text or url
+        self.url = url or text
+        self._px = px
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName(self._text)
+        self.setToolTip(self.url)
+        self.setMinimumWidth(50)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred,
+                           QtWidgets.QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(QtGui.QFontMetrics(self.font_).height() + 3)
+        self.clicked.connect(self._activate)
+
+    @property
+    def font_(self) -> QtGui.QFont:
+        return ui_font(self._px, W.Medium)
+
+    def sizeHint(self):
+        fm = QtGui.QFontMetrics(self.font_)
+        return QtCore.QSize(fm.horizontalAdvance(self._text) + 4, fm.height() + 3)
+
+    def minimumSizeHint(self):
+        return QtCore.QSize(min(60, self.sizeHint().width()), self.sizeHint().height())
+
+    def setText(self, text: str):
+        if text != self._text:
+            self._text = text
+            self.setAccessibleName(text)
+            self.updateGeometry()
+            self.update()
+
+    def text(self) -> str:
+        return self._text
+
+    def refresh_fonts(self):
+        self.setFixedHeight(QtGui.QFontMetrics(self.font_).height() + 3)
+        self.updateGeometry()
+        self.update()
+
+    def keyPressEvent(self, e):
+        if e.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._activate()
+            e.accept()
+            return
+        super().keyPressEvent(e)
+
+    def _activate(self):
+        if self.url:
+            _open_url(self.url)
+
+    def paintEvent(self, _e):
+        p = painter(self)
+        p.setFont(self.font_)
+        color = theme.link()
+        p.setPen(color)
+        fm = QtGui.QFontMetrics(self.font_)
+        r = QtCore.QRectF(self.rect())
+        text = fm.elidedText(self._text, Qt.TextElideMode.ElideRight, max(1, int(r.width())))
+        p.drawText(r, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
+        # 静止时也画一条很淡的下划线，明确这是可点击链接；悬停 / 聚焦时加深。
+        active = max(self._hover.x, 1.0 if self.hasFocus() else 0.0)
+        c = QtGui.QColor(color)
+        c.setAlphaF(0.35 + 0.65 * min(1.0, active))
+        p.setPen(QtGui.QPen(c, 1))
+        width = min(float(fm.horizontalAdvance(text)), r.width())
+        baseline = r.center().y() + (fm.ascent() - fm.descent()) / 2
+        p.drawLine(QtCore.QPointF(r.left(), baseline + 2.5),
+                   QtCore.QPointF(r.left() + width, baseline + 2.5))
+
+
+class Tag(QtWidgets.QWidget, Themed):
+    """版本 / 信息胶囊：一层强调色淡底 + 圆角文字，可选点击。
+
+    带 ``url`` 时才会变成可点击控件；没有 url 的版本胶囊外观和行为保持原样。
+    """
+
+    clicked = Signal()
+
+    def __init__(self, text: str = "", parent=None, px: float = 11.5, height: int = 24,
+                 url: str = ""):
+        super().__init__(parent)
+        self._text = text
+        self._px = px
+        self.url = str(url or "")
+        self._hover = 0.0
+        self._pressed = False
+        self.setFixedHeight(height)
+        self.setAccessibleName(text)
+        if self.url:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._fit()
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed,
+                           QtWidgets.QSizePolicy.Policy.Fixed)
+        self._hook_theme()
+
+    @property
+    def font_(self) -> QtGui.QFont:
+        return ui_font(self._px, W.DemiBold, num=True)
+
+    def _fit(self):
+        fm = QtGui.QFontMetrics(self.font_)
+        self.setFixedWidth(fm.horizontalAdvance(self._text) + 20)
+
+    def sizeHint(self):
+        fm = QtGui.QFontMetrics(self.font_)
+        return QtCore.QSize(fm.horizontalAdvance(self._text) + 20, self.height())
+
+    def setText(self, text: str):
+        text = text or ""
+        if text != self._text:
+            self._text = text
+            self.setAccessibleName(text)
+            self._fit()
+            self.update()
+
+    def text(self) -> str:
+        return self._text
+
+    def refresh_fonts(self):
+        self._fit()
+        self.update()
+
+    def enterEvent(self, e):
+        if self.url:
+            self._hover = 1.0
+            self.update()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):
+        self._hover = 0.0
+        self._pressed = False
+        self.update()
+        super().leaveEvent(e)
+
+    def mousePressEvent(self, e):
+        if self.url and e.button() == Qt.MouseButton.LeftButton:
+            self._pressed = True
+            self.update()
+            e.accept()
+            return
+        super().mousePressEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if self.url and e.button() == Qt.MouseButton.LeftButton:
+            was_pressed = self._pressed
+            self._pressed = False
+            self.update()
+            if was_pressed and self.rect().contains(e.position().toPoint()):
+                self.clicked.emit()
+            e.accept()
+            return
+        super().mouseReleaseEvent(e)
+
+    def keyPressEvent(self, e):
+        if self.url and e.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.clicked.emit()
+            e.accept()
+            return
+        super().keyPressEvent(e)
+
+    def paintEvent(self, _e):
+        p = painter(self)
+        r = QtCore.QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        accent = theme.link()
+        hover = self._hover if self.url else 0.0
+        if self._pressed:
+            hover = 1.0
+        bg = QtGui.QColor(accent)
+        bg.setAlpha(32 + round(22 * hover))
+        border = QtGui.QColor(accent)
+        border.setAlpha(96 + round(48 * hover) + (36 if self.hasFocus() else 0))
+        p.setPen(QtGui.QPen(border, 1))
+        p.setBrush(bg)
+        radius = r.height() / 2
+        p.drawRoundedRect(r, radius, radius)
+        p.setFont(self.font_)
+        p.setPen(theme.text(0.95))
+        p.drawText(r, Qt.AlignmentFlag.AlignCenter, self._text)
+
+
+class TagRow(QtWidgets.QWidget):
+    """标题 + 胶囊左对齐的一行（作者 / 开源协议）。"""
+
+    def __init__(self, title: str, tag: Tag, parent=None):
+        super().__init__(parent)
+        self.tag = tag
+        lay = QtWidgets.QHBoxLayout(self)
+        lay.setContentsMargins(10, 9, 10, 9)
+        lay.setSpacing(6)
+        self.title = TLabel(title, 13, W.DemiBold, "title")
+        lay.addWidget(self.title, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(tag, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addStretch(1)
+
+
+class ProgressLine(QtWidgets.QWidget, Themed):
+    """细圆角进度条；总大小未知时可切换为来回扫动的 indeterminate 状态。"""
+
+    def __init__(self, parent=None, height: int = 6):
+        super().__init__(parent)
+        self._value = 0.0
+        self._indeterminate = False
+        self._phase = 0.0
+        self.setAccessibleName("更新进度")
+        self.setFixedHeight(height)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                           QtWidgets.QSizePolicy.Policy.Fixed)
+        self._timer = QtCore.QTimer(self, interval=16, timeout=self._tick)
+        self._hook_theme()
+
+    def set_value(self, value: float):
+        self._value = max(0.0, min(1.0, float(value or 0.0)))
+        self.update()
+
+    def value(self) -> float:
+        return self._value
+
+    def set_indeterminate(self, on: bool):
+        on = bool(on)
+        if on == self._indeterminate:
+            if on and not self._timer.isActive():
+                self._timer.start()
+            return
+        self._indeterminate = on
+        self._phase = 0.0
+        if on:
+            self._timer.start()
+        else:
+            self._timer.stop()
+        self.update()
+
+    def stop(self):
+        self._timer.stop()
+        self._indeterminate = False
+        self.update()
+
+    def _tick(self):
+        self._phase = (self._phase + 0.025) % 2.0
+        self.update()
+
+    def hideEvent(self, e):
+        self._timer.stop()
+        super().hideEvent(e)
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        if self._indeterminate and not self._timer.isActive():
+            self._timer.start()
+
+    def paintEvent(self, _e):
+        p = painter(self)
+        r = QtCore.QRectF(self.rect())
+        radius = r.height() / 2
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(theme.track())
+        p.drawRoundedRect(r, radius, radius)
+        accent = theme.on_color()
+        if self._indeterminate:
+            width = max(r.height() * 2.0, r.width() * 0.28)
+            if r.width() <= width:
+                p.setBrush(accent)
+                p.drawRoundedRect(r, radius, radius)
+                return
+            t = abs(self._phase - 1.0)          # 0 → 1 → 0 来回扫
+            x = (r.width() - width) * t
+            bar = QtCore.QRectF(r.x() + x, r.y(), width, r.height())
+        elif self._value > 0:
+            bar = QtCore.QRectF(r.x(), r.y(), max(r.height(), r.width() * self._value), r.height())
+        else:
+            return
+        p.setBrush(accent)
+        p.drawRoundedRect(bar, radius, radius)
+
+
+class UpdatePanel(QtWidgets.QWidget):
+    """关于页的更新面板：检查版本、后台下载、显示进度并重启。
+
+    所有后台回调都会先检查 ``_alive``；设置窗口关闭或 ``_reload()`` 时会调用
+    ``shutdown()`` 设置取消事件，因此不会去碰已经销毁的控件。
+    """
+
+    def __init__(self, win: "SettingsWindow", parent=None):
+        super().__init__(parent)
+        self.win = win
+        self._alive = True
+        self._cancel = threading.Event()
+        self._checking = False
+        self._updating = False
+        self._auto_checked = False
+        self._remote = ""
+        self._result: dict | None = None
+        self._running = str(APP_VERSION)
+        self._current = self._running       # 向后兼容：界面比较始终以运行版本为准
+        self._pending = False
+        self._pending_version = ""
+        self._frozen = not updater.can_self_update()
+
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(10, 8, 10, 10)
+        lay.setSpacing(8)
+
+        info = QtWidgets.QHBoxLayout()
+        info.setSpacing(8)
+        info.addWidget(TLabel("当前版本", 11.5, W.Normal, "hint"))
+        self.current_tag = Tag(f"v{self._running}")
+        self.current_tag.setObjectName("currentVersionTag")
+        info.addWidget(self.current_tag)
+        info.addSpacing(16)
+        info.addWidget(TLabel("新版本", 11.5, W.Normal, "hint"))
+        self.remote_label = TLabel("尚未检查", 12, W.DemiBold, "title")
+        self.remote_label.setObjectName("remoteVersionLabel")
+        info.addWidget(self.remote_label)
+        info.addStretch(1)
+        lay.addLayout(info)
+
+        self.status = TLabel("点「检查更新」查看 CNB 上的最新版本。", 11.5, W.Normal, "hint",
+                             wrap=True)
+        self.status.setObjectName("updateStatusLabel")
+        lay.addWidget(self.status)
+
+        self.progress = ProgressLine()
+        self.progress.setObjectName("updateProgress")
+        self.progress.hide()
+        lay.addWidget(self.progress)
+
+        self.detail = TLabel("", 11, W.Normal, "hint", wrap=True)
+        self.detail.setObjectName("updateDetailLabel")
+        self.detail.hide()
+        lay.addWidget(self.detail)
+
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.setSpacing(8)
+        self.check_btn = Button("检查更新", G.REFRESH)
+        self.check_btn.clicked.connect(self.check)
+        self.download_btn = Button("打开开源仓库" if self._frozen else "下载并更新", G.DOWN)
+        # 打包版即使检查失败也允许直接打开开源仓库
+        self.download_btn.setEnabled(self._frozen)
+        self.download_btn.clicked.connect(self._download_clicked)
+        self.restart_btn = Button("立即重启", G.POWER, variant="primary")
+        self.restart_btn.clicked.connect(self._restart_clicked)
+        self.restart_btn.hide()
+        self.cancel_btn = Button("取消更新", variant="danger")
+        self.cancel_btn.clicked.connect(self._cancel_update)
+        self.cancel_btn.hide()
+        buttons.addWidget(self.check_btn)
+        buttons.addWidget(self.download_btn)
+        buttons.addWidget(self.restart_btn)
+        buttons.addWidget(self.cancel_btn)
+        buttons.addStretch(1)
+        lay.addLayout(buttons)
+
+        self.hint = TLabel(
+            "打包版不能替换正在运行的 exe；请从开源仓库下载新版压缩包手动替换。"
+            if self._frozen else
+            "更新会保留 config.json、data、models、.venv；完成后会自动重启 wisland。"
+            "更新前会备份到 data/updates，失败自动回滚。",
+            11, W.Normal, "desc", wrap=True)
+        self.hint.setObjectName("updateHintLabel")
+        lay.addWidget(self.hint)
+
+        self._restart_timer = QtCore.QTimer(self, singleShot=True)
+        self._restart_timer.timeout.connect(self._auto_restart)
+
+        self._detect_pending()
+
+    # ---- 生命周期 ----
+    def showEvent(self, e):
+        super().showEvent(e)
+        if self._alive and not self._pending and not self._auto_checked:
+            self._auto_checked = True
+            QtCore.QTimer.singleShot(0, self.check)
+
+    def shutdown(self):
+        """窗口关闭 / 重建时调用：取消后台任务和延迟重启，之后所有回调整体忽略。"""
+        self._alive = False
+        self._cancel.set()
+        try:
+            self._restart_timer.stop()
+        except RuntimeError:
+            pass
+        try:
+            self.progress.stop()
+        except RuntimeError:
+            pass
+
+    # ---- 待重启状态 ----
+    def _detect_pending(self):
+        """磁盘版本比正在运行的版本新：说明上次已经替换，只差重启。"""
+        try:
+            disk = updater.current_version()
+            if updater.version_tuple(disk) > updater.version_tuple(self._running):
+                self._enter_pending(disk)
+        except updater.UpdateError:
+            pass
+
+    def _enter_pending(self, version: str, result: dict | None = None):
+        self._pending = True
+        self._pending_version = version
+        self._remote = version
+        self._result = result
+        self._auto_checked = True
+        try:
+            self.current_tag.setText(f"v{self._running}")
+            self.remote_label.setText(f"v{version}")
+            self.remote_label.set_role("title")
+            self.progress.show()
+            self.progress.set_indeterminate(False)
+            self.progress.set_value(1.0)
+            self.check_btn.setEnabled(False)
+            self.check_btn.set_variant("ghost")
+            self.download_btn.setEnabled(False)
+            self.download_btn.set_variant("ghost")
+            self.cancel_btn.hide()
+            self.cancel_btn.setEnabled(True)
+            self.restart_btn.setEnabled(True)
+            self.restart_btn.show()
+        except RuntimeError:
+            return
+
+        if result:
+            old = str(result.get("old_version") or "")
+            backup = str(result.get("backup") or "")
+            changed = result.get("changed") or []
+            parts = [f"旧版本 {old} 已备份"] if old else []
+            if backup:
+                parts.append(f"备份位置：{backup}")
+            if changed:
+                parts.append(f"共替换 {len(changed)} 项程序文件")
+            if "requirements.txt" in changed:
+                parts.append("依赖清单有变化，重启前请重新运行 setup.bat")
+            self._set_detail("；".join(parts) + "。" if parts else "")
+            self._set_status(f"已下载并替换到 v{version}，重启 wisland 后生效", "accent")
+        else:
+            self._set_detail("")
+            self._set_status(f"已下载 v{version}，重启 wisland 后生效", "accent")
+
+    # ---- 状态展示 ----
+    def _set_status(self, text: str, role: str, percent: int | None = None):
+        if not self._alive:
+            return
+        try:
+            self.status.setText(text)
+            self.status.set_role(role)
+            if percent is not None:
+                self.progress.show()
+                self.progress.set_indeterminate(False)
+                self.progress.set_value(percent / 100.0)
+        except RuntimeError:
+            pass
+
+    def _set_detail(self, text: str):
+        if not self._alive:
+            return
+        try:
+            if text:
+                self.detail.setText(text)
+                self.detail.show()
+            else:
+                self.detail.hide()
+        except RuntimeError:
+            pass
+
+    def _can_download(self) -> bool:
+        if self._pending:
+            return False
+        if self._frozen:
+            return bool(self._remote)
+        if not self._remote:
+            return False
+        try:
+            return updater.version_tuple(self._remote) >= updater.version_tuple(self._running)
+        except updater.UpdateError:
+            return False
+
+    # ---- 检查更新 ----
+    def check(self):
+        if not self._alive or self._pending or self._checking or self._updating:
+            return
+        self._checking = True
+        self._result = None
+        self.restart_btn.hide()
+        self.cancel_btn.hide()
+        self.cancel_btn.setEnabled(True)
+        self._set_detail("")
+        self.progress.hide()
+        self._set_status("正在检查更新…", "accent")
+        self.remote_label.setText("检查中…")
+        self.remote_label.set_role("title")
+        self.check_btn.setEnabled(False)
+        self.download_btn.setEnabled(False)
+        self.check_btn.set_variant("ghost")
+        self.download_btn.set_variant("ghost")
+        run_bg(updater.fetch_latest_version, on_done=self._checked,
+               on_error=self._check_failed)
+
+    def _checked(self, version):
+        if not self._alive or self._pending:
+            return
+        self._checking = False
+        try:
+            remote = str(version or "").strip()
+            remote_t = updater.version_tuple(remote)
+            current_t = updater.version_tuple(self._running)
+        except updater.UpdateError:
+            self._check_failed(updater.UpdateError("新版本号格式不正确，请稍后重试。"))
+            return
+        self._remote = remote
+        self.remote_label.setText(f"v{remote}")
+        self.remote_label.set_role("title")
+        self.check_btn.setEnabled(True)
+        self.download_btn.set_variant("ghost")
+        current_text = f"v{self._running}"
+
+        if self._frozen:
+            self.download_btn.set_text("打开开源仓库")
+            self.download_btn.setEnabled(True)
+            if remote_t > current_t:
+                self._set_status(f"发现新版本 v{remote}（当前 {current_text}）", "accent")
+            elif remote_t == current_t:
+                self._set_status(f"已是最新版本 {current_text}", "ok")
+            else:
+                self._set_status(f"线上版本 v{remote} 低于当前版本 {current_text}", "hint")
+            return
+
+        if remote_t > current_t:
+            self._set_status(f"发现新版本 v{remote}（当前 {current_text}）", "accent")
+            self.download_btn.set_text("下载并更新")
+            self.download_btn.set_variant("primary")
+            self.download_btn.setEnabled(True)
+        elif remote_t == current_t:
+            self._set_status(f"已是最新版本 {current_text}", "ok")
+            self.download_btn.set_text("重新下载并覆盖")
+            self.download_btn.setEnabled(True)
+        else:
+            self._set_status(f"线上版本 v{remote} 低于当前版本 {current_text}", "hint")
+            self.download_btn.set_text("无需更新")
+            self.download_btn.setEnabled(False)
+
+    def _check_failed(self, exc):
+        if not self._alive or self._pending:
+            return
+        self._checking = False
+        self._remote = ""
+        self.remote_label.setText("—")
+        self.remote_label.set_role("title")
+        message = str(exc) if isinstance(exc, updater.UpdateError) else "检查更新失败，请稍后重试。"
+        self._set_status(f"检查更新失败：{message}", "danger")
+        self.check_btn.setEnabled(True)
+        self.check_btn.set_variant("ghost")
+        self.download_btn.set_variant("ghost")
+        if self._frozen:
+            self.download_btn.set_text("打开开源仓库")
+            self.download_btn.setEnabled(True)
+        else:
+            self.download_btn.set_text("下载并更新")
+            self.download_btn.setEnabled(False)
+
+    # ---- 下载 / 更新 ----
+    def _download_clicked(self):
+        if not self._alive or self._pending or self._checking or self._updating:
+            return
+        if self._frozen:
+            if not _open_url(REPO_URL):
+                self._set_status(f"无法打开浏览器，请手动访问 {REPO_URL}", "danger")
+            return
+        if not self._can_download():
+            return
+
+        git_note = ""
+        if (ROOT / ".git").exists():
+            git_note = "\n当前是 Git 工作区：未提交的源码修改会被覆盖。"
+        text = (f"将从 CNB 拉取最新源码 v{self._remote} 并替换程序文件。\n"
+                "config.json、data/、models/、.venv 会保留，更新完成后会自动重启 wisland。"
+                + git_note)
+        if not Confirm.ask(self.win, "下载并更新？", text, ok_text="下载并更新", danger=True):
+            return
+
+        self._updating = True
+        self._result = None
+        self._cancel = threading.Event()
+        self.check_btn.setEnabled(False)
+        self.download_btn.setEnabled(False)
+        self.check_btn.set_variant("ghost")
+        self.download_btn.set_variant("ghost")
+        self.restart_btn.hide()
+        self.cancel_btn.setEnabled(True)
+        self.cancel_btn.show()
+        self._set_detail("")
+        self.progress.show()
+        self.progress.set_indeterminate(False)
+        self.progress.set_value(0.0)
+        self._set_status("正在准备更新…", "accent", 0)
+        run_bg(updater.run_update, ROOT, self._cancel,
+               self._progress_from_worker, self._status_from_worker,
+               on_done=self._updated, on_error=self._update_failed)
+
+    def _cancel_update(self):
+        if not self._alive or not self._updating:
+            return
+        self._cancel.set()
+        self.cancel_btn.setEnabled(False)
+        self._set_status("正在取消更新…", "hint")
+
+    def _progress_from_worker(self, done, total):
+        if not self._alive:
+            return
+        bg_ui(lambda: self._on_progress(done, total))
+
+    def _status_from_worker(self, text, percent=None):
+        if not self._alive:
+            return
+        bg_ui(lambda: self._on_update_status(text, percent))
+
+    def _on_progress(self, done, total):
+        if not self._alive or not self._updating:
+            return
+        try:
+            if total > 0:
+                ratio = min(1.0, done / max(1, total))
+                self.progress.set_indeterminate(False)
+                self.progress.set_value(0.05 + 0.70 * ratio)
+                self.status.setText(
+                    f"正在下载更新包… {fmt_bytes(done)} / {fmt_bytes(total)}")
+            else:
+                self.progress.set_indeterminate(True)
+                self.status.setText(f"正在下载更新包… 已下载 {fmt_bytes(done)}")
+            self.status.set_role("accent")
+        except RuntimeError:
+            pass
+
+    def _on_update_status(self, text, percent=None):
+        if not self._alive or not self._updating:
+            return
+        if text:
+            role = "ok" if "更新完成" in text else "accent"
+            self._set_status(text, role, percent)
+        elif percent is not None:
+            self._set_status("", "accent", percent)
+
+    def _updated(self, result):
+        if not self._alive:
+            return
+        self._updating = False
+        self._cancel.clear()
+        result = result if isinstance(result, dict) else {}
+        version = str(result.get("version") or self._remote or self._pending_version)
+        if not version:
+            version = self._running
+        self._enter_pending(version, result=result)
+        self._schedule_auto_restart()
+
+    def _update_failed(self, exc):
+        if not self._alive:
+            return
+        self._updating = False
+        self._cancel.clear()
+        self._pending = False
+        try:
+            self.progress.set_indeterminate(False)
+            self.progress.set_value(0.0)
+            self.progress.hide()
+            self.cancel_btn.hide()
+            self.cancel_btn.setEnabled(True)
+            self.restart_btn.hide()
+            self.check_btn.setEnabled(True)
+            self.check_btn.set_variant("ghost")
+            self.download_btn.set_variant("ghost")
+            if self._frozen:
+                self.download_btn.set_text("打开开源仓库")
+                self.download_btn.setEnabled(True)
+            else:
+                if self._can_download():
+                    self.download_btn.setEnabled(True)
+                else:
+                    self.download_btn.setEnabled(False)
+        except RuntimeError:
+            return
+        self.remote_label.set_role("title")
+        if isinstance(exc, updater.UpdateCancelled):
+            self._set_status(str(exc) or "更新已取消。", "hint")
+            self._set_detail("")
+            return
+        message = str(exc) if isinstance(exc, updater.UpdateError) else "更新失败，请稍后重试。"
+        self._set_status(f"更新失败：{message}", "danger")
+        backup = getattr(exc, "backup", None)
+        self._set_detail(f"备份位置：{backup}" if backup else "")
+
+    def _schedule_auto_restart(self):
+        """仅本次更新成功后调用：稍等片刻让用户看到“正在重启”，然后自动重启。"""
+        if not self._alive or not self._pending:
+            return
+        try:
+            self.restart_btn.hide()
+            self.check_btn.setEnabled(False)
+            self.download_btn.setEnabled(False)
+            self._set_status("更新完成，正在重启 wisland…", "accent")
+        except RuntimeError:
+            return
+        self._restart_timer.start(1200)
+
+    def _auto_restart(self):
+        if not self._alive or not self._pending:
+            return
+        self._restart_clicked(auto=True)
+
+    def _restart_clicked(self, auto: bool = False):
+        if not self._alive:
+            return
+        if auto and not self._pending:
+            return
+        self._restart_timer.stop()
+        try:
+            dirty = len(self.win._changed())
+        except Exception:  # noqa: BLE001 - 窗口正在销毁时按无未保存处理
+            dirty = 0
+        if dirty and not Confirm.ask(
+                self.win,
+                "更新完成，需要重启" if auto else "重启前有未保存的修改",
+                f"还有 {dirty} 项设置修改未保存，重启后会丢失。",
+                ok_text="直接重启", danger=True):
+            self._set_status(
+                "更新已完成；可保存设置后手动重启" if auto
+                else "已取消重启；可保存设置后手动重启", "hint")
+            self.restart_btn.setEnabled(True)
+            self.restart_btn.show()
+            return
+        self.restart_btn.setEnabled(False)
+        self._set_status("正在重启 wisland…", "accent")
+        if updater.restart_after_update(ROOT):
+            app = QtWidgets.QApplication.instance()
+            if app is not None:
+                QtCore.QTimer.singleShot(200, app.quit)
+        else:
+            self._set_status("无法自动重启，请手动关闭并重新打开 wisland。", "danger")
+            self.restart_btn.setEnabled(True)
+            self.restart_btn.show()
 
 
 class SettingsWindow(QtWidgets.QWidget):
@@ -2187,6 +2994,7 @@ class SettingsWindow(QtWidgets.QWidget):
         self._current = PAGES[0][0]
         self._last_page = PAGES[0][0]
         self._root: QtWidgets.QWidget | None = None
+        self._update_panel: UpdatePanel | None = None
         self._sticky = ""
         self._positioned = False
         self._closing = False
@@ -2196,7 +3004,22 @@ class SettingsWindow(QtWidgets.QWidget):
         theme.changed.connect(self.update)
 
     # ================================================================ 结构
+    def _shutdown_update_panel(self):
+        """先停掉关于页的后台任务，再让旧控件被销毁。"""
+        panel = self._update_panel
+        self._update_panel = None
+        if panel is not None:
+            try:
+                panel.shutdown()
+            except RuntimeError:
+                pass
+
+    def cleanup(self):
+        """公开的退出清理入口：应用 aboutToQuit 时停掉更新 / 检查任务。"""
+        self._shutdown_update_panel()
+
     def _build(self):
+        self._shutdown_update_panel()
         self._bindings = []
         self._forms = {}
         self._navs = {}
@@ -2291,6 +3114,7 @@ class SettingsWindow(QtWidgets.QWidget):
             "launcher": self._page_launcher,
             "system": self._page_system,
             "advanced": self._page_advanced,
+            "about": self._page_about,
         }
         descs = {
             "look": "位置上贴哪条边、展开方式、主题与收起态内容。拖动灵动岛也会自动记下位置。",
@@ -2304,6 +3128,7 @@ class SettingsWindow(QtWidgets.QWidget):
             "launcher": "剪贴板保留条数与主页底部的应用启动器。",
             "system": "Clash Verge 与亮度控制（Twinkle）的本地路径。",
             "advanced": "配置文件的位置、导入导出，以及恢复默认设置。",
+            "about": "应用信息、版本更新与开源说明。",
         }
         for key, title, _glyph in PAGES:
             form = Form(self, key, title, descs.get(key, ""))
@@ -2331,7 +3156,7 @@ class SettingsWindow(QtWidgets.QWidget):
         super().resizeEvent(e)
 
     def _fit_sidebar(self):
-        """窗口很矮时压缩导航项高度，保证 11 个分类都能显示出来。"""
+        """窗口很矮时压缩导航项高度，保证 12 个分类（含关于）都能显示出来。"""
         n = len(self._navs)
         if not n:
             return
@@ -2489,6 +3314,7 @@ class SettingsWindow(QtWidgets.QWidget):
 
     def closeEvent(self, e):
         self._closing = True
+        self._shutdown_update_panel()
         self.closed.emit()
         super().closeEvent(e)
         self.deleteLater()          # 关闭后释放，避免反复打开累积窗口
@@ -2851,6 +3677,81 @@ class SettingsWindow(QtWidgets.QWidget):
                "stocks.alerts）仍然需要在 config.json 里编辑，可以点上面的「打开」。")
         f.note(f"数据目录：{DATA_DIR}")
 
+    # ================================================================ 页：关于
+    def _page_about(self, f: Form):
+        f.outer.addSpacing(8)
+        hero = Card(radius=18)
+        hero.setObjectName("aboutHero")
+        hero.setMinimumHeight(88)
+        h = QtWidgets.QHBoxLayout(hero)
+        h.setContentsMargins(18, 10, 18, 10)
+        h.setSpacing(16)
+        h.addWidget(Logo(size=64), 0, Qt.AlignmentFlag.AlignVCenter)
+
+        titles = QtWidgets.QVBoxLayout()
+        titles.setSpacing(2)
+        name = TLabel(APP_NAME, 24, W.DemiBold, "title")
+        name.setObjectName("aboutAppName")
+        titles.addWidget(name)
+        titles.addWidget(TLabel(APP_NAME_CN, 13, W.Medium, "desc"))
+        titles.addWidget(TLabel(APP_TAGLINE, 11.5, W.Normal, "hint"))
+        h.addLayout(titles, 1)
+        version_tag = Tag(f"v{APP_VERSION}")
+        version_tag.setObjectName("aboutVersionTag")
+        h.addWidget(version_tag, 0, Qt.AlignmentFlag.AlignTop)
+        f.outer.addWidget(hero)
+
+        f.section("版本更新")
+        panel = UpdatePanel(self)
+        panel.setObjectName("updatePanel")
+        self._update_panel = panel
+        f._section.add(panel)
+
+        f.section("二创信息")
+        author_tag = Tag(AUTHOR_NAME, url=AUTHOR_URL)
+        author_tag.setObjectName("authorTag")
+        author_tag.setToolTip("在浏览器中打开白木的主页")
+        author_tag.clicked.connect(lambda: _open_url(AUTHOR_URL))
+        author_row = TagRow("作者", author_tag)
+        author_row.setObjectName("authorRow")
+        f._add_row(author_row)
+
+        open_btn = Button("点击打开", G.OPEN)
+        open_btn.setObjectName("openRepoButton")
+        open_btn.setToolTip(REPO_URL)
+        open_btn.clicked.connect(lambda: _open_url(REPO_URL))
+        f._add_row(Row("应用开源", "Ciallo～(∠・ω< )⌒★", open_btn))
+
+        license_tag = Tag(LICENSE_NAME, url=LICENSE_URL)
+        license_tag.setObjectName("licenseTag")
+        license_tag.setToolTip("在浏览器中打开 MIT License")
+        license_tag.clicked.connect(lambda: _open_url(LICENSE_URL))
+        license_row = TagRow("开源协议", license_tag)
+        license_row.setObjectName("licenseRow")
+        f._add_row(license_row)
+
+        f.section("原创信息")
+        original_author_tag = Tag(ORIGINAL_AUTHOR_NAME)
+        original_author_tag.setObjectName("originalAuthorTag")
+        original_author_row = TagRow("作者", original_author_tag)
+        original_author_row.setObjectName("originalAuthorRow")
+        f._add_row(original_author_row)
+
+        original_open_btn = Button("点击打开", G.OPEN)
+        original_open_btn.setObjectName("originalOpenRepoButton")
+        original_open_btn.setToolTip(ORIGINAL_REPO_URL)
+        original_open_btn.clicked.connect(lambda: _open_url(ORIGINAL_REPO_URL))
+        f._add_row(Row("应用开源", "原创项目托管在 GitHub，点击按钮在浏览器打开。",
+                       original_open_btn))
+
+        original_license_tag = Tag(ORIGINAL_LICENSE_NAME, url=ORIGINAL_LICENSE_URL)
+        original_license_tag.setObjectName("originalLicenseTag")
+        original_license_tag.setToolTip("在浏览器中打开 MIT License")
+        original_license_tag.clicked.connect(lambda: _open_url(ORIGINAL_LICENSE_URL))
+        original_license_row = TagRow("开源协议", original_license_tag)
+        original_license_row.setObjectName("originalLicenseRow")
+        f._add_row(original_license_row)
+
     # ================================================================ 高级操作
     def _open_config(self):
         _open_path(CONFIG_PATH)
@@ -2933,6 +3834,7 @@ class SettingsWindow(QtWidgets.QWidget):
 
     def _reload(self):
         self._last_page = self._current
+        self._shutdown_update_panel()
         old = self._root
         self._root = None
         if old is not None:

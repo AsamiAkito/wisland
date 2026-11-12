@@ -705,6 +705,12 @@ def main():
     fs_timer.start()
 
     def shutdown():
+        win = _settings.get("win")
+        if win is not None:
+            try:
+                win.cleanup()
+            except RuntimeError:
+                pass
         ctx.live.stop(wait=True)
         for s in (ctx.media, ctx.audio, ctx.brightness, ctx.radio, ctx.notify, ctx.dsh, ctx.stocks,
                   ctx.weather, ctx.clash, ctx.translate, ctx.clipboard, ctx.mailcheck, ctx.learn):
