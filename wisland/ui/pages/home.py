@@ -27,7 +27,8 @@ MESSAGE_MODULES = {
     "dingtalk": ("钉钉", G.CONTACT),
     "dsh": ("DeepSeek", G.CHAT),
 }
-DEFAULT_MODULES = ["qq", "wechat", "mail", "dsh"]
+# 默认消息模块（配置缺失或不是列表时的兜底）；默认不含 dsh，可在消息页手动添加
+DEFAULT_MODULES = ["qq", "wechat", "mail"]
 
 
 def module_info(kind: str) -> tuple[str, str]:

@@ -518,7 +518,7 @@ class NotifyService(QtCore.QObject):
         v = cfg.get("notify.modules")
         if isinstance(v, list):
             return {k for k in v if isinstance(k, str)}
-        return {"qq", "wechat", "mail", "dsh"}
+        return {"qq", "wechat", "mail"}
 
     @staticmethod
     def _popup_apps() -> dict:

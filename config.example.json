@@ -44,8 +44,7 @@
     "modules": [
       "qq",
       "wechat",
-      "mail",
-      "dsh"
+      "mail"
     ],
     "body_preview": [
       "feishu",
