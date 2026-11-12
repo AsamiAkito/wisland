@@ -388,6 +388,10 @@ class CityChip(Hoverable):
         fm = QtGui.QFontMetrics(ui_font(12.5, W.DemiBold))
         self.setFixedWidth(fm.horizontalAdvance(self.name) + fm.horizontalAdvance(self.temp or "--°") + 50)
 
+    def refresh_fonts(self):
+        self._fit()
+        self.update()
+
     def set_info(self, temp: str, glyph):
         self.temp, self.glyph = temp, glyph
         self._fit()

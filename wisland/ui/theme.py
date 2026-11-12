@@ -8,6 +8,77 @@ UI_FAMILIES = ["HarmonyOS Sans", "MiSans", "Segoe UI Variable Text", "Microsoft 
 NUM_FAMILIES = ["HarmonyOS Sans", "Segoe UI Variable Display", "Segoe UI"]
 ICON_FAMILIES = ["Segoe Fluent Icons", "Segoe MDL2 Assets"]
 
+# 「设置 → 外观与交互 → 字体」里选的自定义字体（本机字体库里的 family 名）。
+# 空字符串 = 用上面的内置字体栈；自定义字体排在第一位，缺字形时自动回退到内置字体。
+_font_family = ""
+
+
+def font_family() -> str:
+    return _font_family
+
+
+def font_stack(num: bool = False) -> list[str]:
+    """实际使用的字体族列表；num=True 时优先用数字字体。"""
+    base = NUM_FAMILIES + UI_FAMILIES if num else UI_FAMILIES
+    stack = ([_font_family] if _font_family else []) + list(base)
+    return list(dict.fromkeys(stack))          # 去重，保持顺序
+
+
+def set_font_family(family: str) -> bool:
+    """切换自定义字体；返回是否真的发生了变化。空字符串 = 恢复内置字体栈。"""
+    global _font_family
+    fam = str(family or "").strip()
+    if fam == _font_family:
+        return False
+    _font_family = fam
+    return True
+
+
+def font_css() -> str:
+    """QSS 用的 font-family 值。名字统一加引号，含空格或逗号也能正确解析。"""
+    return ", ".join("'" + f.replace("\\", "\\\\").replace("'", "\\'") + "'" for f in font_stack())
+
+
+def refresh_widget_fonts() -> None:
+    """自定义字体变化后，把已经建好的界面也换成新字体。
+
+    - 自绘控件在 paintEvent 里调用 ui_font()，只要重绘就会用上新字体；
+    - QLabel / QLineEdit 这类把 QFont 存在控件里的，需要把字体族换掉；
+    - 图标字体（Segoe Fluent Icons 等）保持不动，否则图标会变成方框；
+    - 自定义控件可以定义 refresh_fonts()，在换字体时重算缓存下来的宽度。
+    """
+    from PySide6 import QtWidgets
+
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        return
+    # Qt 自带的提示框 / 输入框右键菜单也跟着换字体；字号保持系统默认（跟随系统缩放）
+    base = QtGui.QFont(app.font())
+    base.setFamilies(font_stack())
+    app.setFont(base)
+    icons = set(ICON_FAMILIES)
+    stack = font_stack()
+    for w in app.allWidgets():
+        try:
+            f = QtWidgets.QWidget.font(w)    # 用基类实现，避免子类自定义的 font() 被误调用
+            if f.pixelSize() > 0 and not (icons & set(f.families())):
+                f.setFamilies(stack)
+                w.setFont(f)
+                w.updateGeometry()
+        except RuntimeError:                 # 控件已经被销毁
+            continue
+        hook = getattr(w, "refresh_fonts", None)
+        if callable(hook):
+            try:
+                hook()
+            except RuntimeError:
+                pass
+    for w in app.allWidgets():
+        try:
+            w.update()
+        except RuntimeError:
+            pass
+
 
 class G:
     """Segoe Fluent Icons 码位。"""
@@ -66,7 +137,7 @@ class G:
 
 def ui_font(px: float, weight: QtGui.QFont.Weight = QtGui.QFont.Weight.Normal, num: bool = False) -> QtGui.QFont:
     f = QtGui.QFont()
-    f.setFamilies(NUM_FAMILIES + UI_FAMILIES if num else UI_FAMILIES)
+    f.setFamilies(font_stack(num))
     f.setPixelSize(max(1, round(px)))
     f.setWeight(weight)
     f.setHintingPreference(QtGui.QFont.HintingPreference.PreferNoHinting)
@@ -175,6 +246,16 @@ class Theme(QtCore.QObject):
         self.dark = self.pal["dark"]
         if changed:
             self.changed.emit()
+
+    # --- 字体（自定义字体来自本机字体库） ---
+    def set_font_family(self, family: str) -> bool:
+        return set_font_family(family)
+
+    def refresh_fonts(self) -> None:
+        refresh_widget_fonts()
+
+    def font_css(self) -> str:
+        return font_css()
 
     # --- 颜色（按当前主题的色板） ---
     def _c(self, key: str, a: float = 1.0) -> QtGui.QColor:

@@ -188,7 +188,9 @@ def main():
     from .ui.popup import MessagePopups
     from .ui.widgets import glyph_pixmap
 
+    theme.set_font_family(cfg.get("island.font_family", ""))
     theme.set_mode(cfg.get("island.theme", "auto"))
+    theme.refresh_fonts()               # 让 Qt 自带的提示框 / 右键菜单也用上自定义字体
     ctx = SimpleNamespace()
     ctx.media = MediaService()
     ctx.audio = AudioService()
@@ -514,6 +516,7 @@ def main():
             "keep_on_top": bool(isl.get("keep_on_top", True)),
             "passthrough": bool(isl.get("passthrough", False)),
             "compact": isl.get("compact_view", "clock"),
+            "font": str(isl.get("font_family") or ""),
             "mail": _sig([mail.get("interval_s"), mail.get("imap")]),
             "clash": _sig([clash.get("config_dir"), clash.get("app")]),
             "weather": _sig([weather.get("api_key"), weather.get("units"), weather.get("lang"),
@@ -531,6 +534,9 @@ def main():
         prev = _cfg_state(prev_data if isinstance(prev_data, dict) else cfg.data)
         cfg.load()
         now = _cfg_state(cfg.data)
+        if now["font"] != prev["font"]:
+            theme.set_font_family(now["font"])
+            theme.refresh_fonts()
         theme.set_mode(cfg.get("island.theme", "auto"))
         island.apply_layout_settings()
         island.register_hotkeys()

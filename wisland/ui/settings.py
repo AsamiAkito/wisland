@@ -829,6 +829,10 @@ class Button(Hoverable):
         self.setMinimumWidth(self._fit())
         self.update()
 
+    def refresh_fonts(self):
+        self.setMinimumWidth(self._fit())
+        self.update()
+
     def paintEvent(self, _e):
         p = painter(self)
         r = QtCore.QRectF(self.rect()).adjusted(1, 1, -1, -1)
@@ -886,6 +890,10 @@ class Chip(Hoverable):
             self.checked = bool(on)
             self.setMinimumWidth(self._fit())
             self.update()
+
+    def refresh_fonts(self):
+        self.setMinimumWidth(self._fit())
+        self.update()
 
     def keyPressEvent(self, e):
         if e.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
@@ -1020,6 +1028,381 @@ class Chips(QtWidgets.QWidget):
         want = set(values or [])
         for v, c in self._chips:
             c.set_checked(v in want)
+
+
+# ==================================================================== 字体选择
+FONT_ROLE = Qt.ItemDataRole.UserRole          # 行数据：字体 family（空 = 默认字体）
+CJK_ROLE = Qt.ItemDataRole.UserRole + 1       # 行数据：是否含中文字形
+
+
+def installed_fonts() -> list[str]:
+    """读取本机字体库（Windows 已安装字体）；没有 QApplication 时返回空列表。"""
+    try:
+        families = QtGui.QFontDatabase.families()
+    except Exception:  # noqa: BLE001
+        return []
+    return sorted(families, key=str.casefold)
+
+
+def fonts_with_chinese() -> set[str]:
+    """含中文字形的字体名，用来标记 / 过滤。"""
+    try:
+        ws = QtGui.QFontDatabase.WritingSystem.SimplifiedChinese
+        return set(QtGui.QFontDatabase.families(ws))
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+class _FontRowDelegate(QtWidgets.QStyledItemDelegate):
+    """字体列表的一行：左边字体名（用它自己的字形），右边同一字体的预览字。"""
+
+    ROW_H = 38
+
+    def sizeHint(self, option, index):
+        return QtCore.QSize(option.rect.width(), self.ROW_H)
+
+    def paint(self, p, option, index):
+        fam = str(index.data(FONT_ROLE) or "")
+        zh = bool(index.data(CJK_ROLE))
+        sel = bool(option.state & QtWidgets.QStyle.StateFlag.State_Selected)
+        hot = bool(option.state & QtWidgets.QStyle.StateFlag.State_MouseOver)
+        r = QtCore.QRectF(option.rect).adjusted(2, 2, -2, -2)
+        p.save()
+        p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        p.setRenderHint(QtGui.QPainter.RenderHint.TextAntialiasing, True)
+        if sel or hot:
+            bg = QtGui.QColor(theme.on_color() if sel else theme.hover())
+            if sel:
+                bg.setAlpha(46)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(bg)
+            p.drawRoundedRect(r, 9, 9)
+
+        name_font = ui_font(14, W.Medium)
+        if fam:
+            name_font.setFamilies([fam] + name_font.families())
+        sample = "字体预览 Aa 0123"
+        sample_font = QtGui.QFont(name_font)
+        sample_font.setPixelSize(12)
+        p.setFont(sample_font)
+        p.setPen(theme.text2())
+        sw = QtGui.QFontMetrics(sample_font).horizontalAdvance(sample)
+        sample_rect = QtCore.QRectF(r.right() - sw - 12, r.y(), sw + 2, r.height())
+        p.drawText(sample_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, sample)
+
+        x = r.x() + 10
+        if zh:
+            tag = QtCore.QRectF(x, r.center().y() - 7.5, 17, 15)
+            tag_bg = QtGui.QColor(theme.on_color())
+            tag_bg.setAlpha(42)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(tag_bg)
+            p.drawRoundedRect(tag, 5, 5)
+            p.setFont(ui_font(10, W.DemiBold))
+            p.setPen(theme.on_color())
+            p.drawText(tag, Qt.AlignmentFlag.AlignCenter, "中")
+            x = tag.right() + 8
+
+        name = fam or "默认字体（内置字体栈）"
+        avail = max(10.0, sample_rect.left() - x - 10)
+        p.setFont(name_font)
+        p.setPen(theme.text(0.96 if sel else 0.86))
+        p.drawText(QtCore.QRectF(x, r.y(), avail, r.height()),
+                   Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                   QtGui.QFontMetrics(name_font).elidedText(name, Qt.TextElideMode.ElideRight, int(avail)))
+        p.restore()
+
+
+class _FilterChip(Chip):
+    """过滤器用的 Chip：状态由外部统一切换，键盘 Space / Enter 不会自己先切一次。"""
+
+    def keyPressEvent(self, e):
+        if e.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.clicked.emit()
+            e.accept()
+            return
+        super().keyPressEvent(e)
+
+
+class FontDialog(QtWidgets.QDialog):
+    """本机字体库：搜索、只看支持中文的字体、实时预览。"""
+
+    def __init__(self, current: str = "", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("wisland 选择字体")
+        # 和确认框一样置顶，否则会被置顶的设置窗口压在后面
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint
+                            | Qt.WindowType.WindowStaysOnTopHint
+                            | Qt.WindowType.NoDropShadowWindowHint)
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setMinimumSize(560, 500)
+        self.resize(620, 560)
+        self._families = installed_fonts()
+        self._cjk = {f.casefold() for f in fonts_with_chinese()}
+        self._shown = 0
+        self._build()
+        self._select(current)
+        self._apply_filter()
+        self._update_preview()
+        if parent is not None:
+            g = parent.window().frameGeometry()
+            self.move(g.center() - self.rect().center())
+
+    # ---------- 结构 ----------
+    def _build(self):
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(22, 20, 22, 16)
+        lay.setSpacing(10)
+
+        head = QtWidgets.QHBoxLayout()
+        head.setSpacing(8)
+        head.addWidget(TLabel("选择字体", 16, W.DemiBold, "title"))
+        head.addStretch(1)
+        close = IconButton(G.CLOSE, 26, 10, "关闭")
+        close.clicked.connect(self.reject)
+        head.addWidget(close)
+        lay.addLayout(head)
+
+        self.count = TLabel("", 11.5, W.Normal, "hint", wrap=True)
+        lay.addWidget(self.count)
+
+        row = QtWidgets.QHBoxLayout()
+        row.setSpacing(8)
+        self.search = Input(placeholder="搜索字体名字…")
+        self.search.edit.textChanged.connect(lambda _t: self._apply_filter())
+        self.search.edit.installEventFilter(self)
+        row.addWidget(self.search, 1)
+        self.zh = _FilterChip("只看中文字体")
+        self.zh.clicked.connect(self._toggle_zh)
+        row.addWidget(self.zh, 0, Qt.AlignmentFlag.AlignVCenter)
+        lay.addLayout(row)
+
+        self.list = QtWidgets.QListWidget()
+        self.list.setMouseTracking(True)
+        self.list.setUniformItemSizes(True)
+        self.list.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.list.setItemDelegate(_FontRowDelegate(self.list))
+        self._style_list()
+        self.list.currentItemChanged.connect(lambda *_: self._update_preview())
+        self.list.itemDoubleClicked.connect(lambda _i: self.accept())
+        lay.addWidget(self.list, 1)
+
+        self.preview = QtWidgets.QLabel()
+        self.preview.setMinimumHeight(56)
+        self.preview.setStyleSheet(self._preview_qss())
+        lay.addWidget(self.preview)
+
+        self.preview_note = TLabel("", 11, W.Normal, "hint", wrap=True)
+        lay.addWidget(self.preview_note)
+
+        btns = QtWidgets.QHBoxLayout()
+        btns.setSpacing(8)
+        cancel = Button("取消")
+        cancel.clicked.connect(self.reject)
+        self.ok = Button("使用这个字体", variant="primary")
+        self.ok.clicked.connect(self.accept)
+        btns.addStretch(1)
+        btns.addWidget(cancel)
+        btns.addWidget(self.ok)
+        lay.addLayout(btns)
+
+        self._populate()
+
+    def _style_list(self):
+        bar = theme.qss_color(theme.text(0.25))
+        self.list.setStyleSheet(
+            "QListWidget{background:transparent;border:none;outline:0;padding:0 2px}"
+            "QListWidget::item{background:transparent;border:none}"
+            "QScrollBar:vertical{background:transparent;width:6px;margin:4px 0 4px 0}"
+            f"QScrollBar::handle:vertical{{background:{bar};border-radius:3px;min-height:24px}}"
+            "QScrollBar::add-line,QScrollBar::sub-line{height:0}"
+            "QScrollBar::add-page,QScrollBar::sub-page{background:transparent}")
+
+    def _preview_qss(self) -> str:
+        return (f"QLabel{{background:{theme.qss_color(theme.card())};border-radius:12px;"
+                f"padding:9px 14px;color:{theme.qss_color(theme.text())}}}")
+
+    def _populate(self):
+        self.list.clear()
+        rows = [("", False)] + [(f, f.casefold() in self._cjk) for f in self._families]
+        for fam, zh in rows:
+            it = QtWidgets.QListWidgetItem(fam or "默认字体")
+            it.setData(FONT_ROLE, fam)
+            it.setData(CJK_ROLE, zh)
+            it.setSizeHint(QtCore.QSize(0, _FontRowDelegate.ROW_H))
+            it.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            self.list.addItem(it)
+
+    # ---------- 选择 / 过滤 ----------
+    def _select(self, family: str):
+        family = str(family or "")
+        for i in range(self.list.count()):
+            it = self.list.item(i)
+            if str(it.data(FONT_ROLE) or "") == family:
+                self.list.setCurrentItem(it)
+                return
+        self.list.setCurrentRow(0)          # 原来的字体已经不在本机字体库了
+
+    def _toggle_zh(self):
+        self.zh.set_checked(not self.zh.checked)
+        self._apply_filter()
+
+    def _apply_filter(self):
+        query = self.search.edit.text().strip().casefold()
+        zh_only = self.zh.checked
+        self._shown = 0
+        for i in range(self.list.count()):
+            it = self.list.item(i)
+            fam = str(it.data(FONT_ROLE) or "")
+            text = fam or "默认字体"
+            ok = (not zh_only or not fam or bool(it.data(CJK_ROLE))) and (not query or query in text.casefold())
+            it.setHidden(not ok)
+            if ok:
+                self._shown += 1
+        extra = f" · 匹配 {self._shown} 个" if (query or zh_only) else ""
+        self.count.setText(f"读取到本机 {len(self._families)} 个字体{extra}。"
+                           "选中的字体会应用到灵动岛、设置窗口和右键菜单。")
+        cur = self.list.currentItem()
+        if cur is None or cur.isHidden():
+            for i in range(self.list.count()):
+                it = self.list.item(i)
+                if not it.isHidden():
+                    self.list.setCurrentItem(it)
+                    self.list.scrollToItem(it, QtWidgets.QAbstractItemView.ScrollHint.PositionAtCenter)
+                    break
+
+    def chosen(self) -> str:
+        it = self.list.currentItem()
+        return str(it.data(FONT_ROLE) or "") if it is not None else ""
+
+    def _update_preview(self):
+        if not hasattr(self, "preview"):
+            return
+        fam = self.chosen()
+        f = ui_font(19, W.Medium)
+        if fam:
+            f.setFamilies([fam] + f.families())
+        self.preview.setFont(f)
+        self.preview.setText("中文字体预览  AaBbCc  0123456789")
+        if not self._shown:
+            self.preview_note.setText("没有匹配的字体，换个关键词试试。")
+            self.preview_note.set_role("danger")
+        elif not fam:
+            self.preview_note.setText("默认字体：内置字体栈（HarmonyOS Sans → MiSans → 微软雅黑 UI）")
+            self.preview_note.set_role("hint")
+        elif fam.casefold() in self._cjk:
+            self.preview_note.setText(f"{fam} · 含中文字形，灵动岛和设置窗口都会换用它。")
+            self.preview_note.set_role("ok")
+        else:
+            self.preview_note.setText(f"{fam} · 不含中文字形，中文会自动回退到系统字体。")
+            self.preview_note.set_role("accent")
+
+    # ---------- 交互 ----------
+    def showEvent(self, e):
+        super().showEvent(e)
+        QtCore.QTimer.singleShot(0, self._focus_search)
+
+    def _focus_search(self):
+        self.search.edit.setFocus(Qt.FocusReason.PopupFocusReason)
+        self.search.edit.selectAll()
+        cur = self.list.currentItem()
+        if cur is not None:
+            self.list.scrollToItem(cur, QtWidgets.QAbstractItemView.ScrollHint.PositionAtCenter)
+
+    def eventFilter(self, obj, e):
+        if obj is self.search.edit and e.type() == QtCore.QEvent.Type.KeyPress \
+                and e.key() == Qt.Key.Key_Down:
+            self.list.setFocus()
+            return True
+        return super().eventFilter(obj, e)
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key.Key_Escape:
+            self.reject()
+            return
+        if e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.accept()
+            return
+        super().keyPressEvent(e)
+
+    def accept(self):
+        if self._shown <= 0:
+            return
+        super().accept()
+
+    def paintEvent(self, _e):
+        p = painter(self)
+        r = QtCore.QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setPen(QtGui.QPen(theme.text(0.14), 1))
+        p.setBrush(panel_color())
+        p.drawRoundedRect(r, 20, 20)
+
+
+class FontPicker(Hoverable):
+    """字体控件：显示当前字体名（用它自己的字形），点击打开本机字体库。"""
+    changed = Signal()
+
+    def __init__(self, family: str = "", parent=None):
+        super().__init__(parent)
+        self._value = str(family or "")
+        self.setFixedHeight(FIELD_H)
+        self.setFixedWidth(226)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.clicked.connect(self.open_dialog)
+
+    def value(self) -> str:
+        return self._value
+
+    def set_value(self, family):
+        fam = str(family or "").strip()
+        if fam != self._value:
+            self._value = fam
+            self.update()
+
+    def label(self) -> str:
+        return self._value or "默认字体"
+
+    def font_for_label(self) -> QtGui.QFont:
+        f = ui_font(13, W.Medium)
+        if self._value:
+            f.setFamilies([self._value] + f.families())
+        return f
+
+    def keyPressEvent(self, e):
+        if e.key() in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Down):
+            self.open_dialog()
+            e.accept()
+            return
+        super().keyPressEvent(e)
+
+    def open_dialog(self):
+        dlg = FontDialog(self._value, self.window())
+        if dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            self.set_value(dlg.chosen())
+            self.changed.emit()
+
+    def paintEvent(self, _e):
+        p = painter(self)
+        r = QtCore.QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setPen(QtGui.QPen(theme.text(0.11), 1))
+        p.setBrush(field_color())
+        p.drawRoundedRect(r, 10, 10)
+        if self._hover.x > 0.01:
+            c = theme.hover()
+            c.setAlphaF(c.alphaF() * self._hover.x)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(c)
+            p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 9, 9)
+        p.setFont(self.font_for_label())
+        p.setPen(theme.text(0.92))
+        text_r = r.adjusted(12, 0, -28, 0)
+        fm = QtGui.QFontMetrics(p.font())
+        p.drawText(text_r, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                   fm.elidedText(self.label(), Qt.TextElideMode.ElideRight, int(text_r.width())))
+        p.setFont(icon_font(9))
+        p.setPen(theme.text(0.45))
+        p.drawText(r.adjusted(0, 0, -10, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, G.DOWN)
 
 
 # ==================================================================== 列表编辑器
@@ -1498,6 +1881,14 @@ class Form(QtWidgets.QWidget):
         row = self._add_row(Row(title, desc, ctrl, wide=wide))
         dflt = default_of(key) if default is MISSING else default
         self._bind(row, ctrl, key, ctrl.value, ctrl.set_value, str(dflt or ""), validate)
+        return ctrl
+
+    def font_picker(self, key: str, title: str, desc: str = "", default=MISSING):
+        cur = str(cfg.get(key, default_of(key)) or "")
+        ctrl = FontPicker(cur)
+        row = self._add_row(Row(title, desc, ctrl))
+        dflt = str(default_of(key) if default is MISSING else default or "")
+        self._bind(row, ctrl, key, ctrl.value, ctrl.set_value, dflt)
         return ctrl
 
     def path(self, key: str, title: str, desc: str = "", kind: str = "file", default=MISSING,
@@ -2193,6 +2584,9 @@ class SettingsWindow(QtWidgets.QWidget):
         f.section("主题与效果")
         f.choice("island.theme", "主题", "跟随背景自动切换，或固定一套配色。",
                  [(k, label) for k, label in THEME_NAMES], width=180)
+        f.font_picker("island.font_family", "字体",
+               "读取本机已安装的字体；选「默认字体」恢复内置字体栈（HarmonyOS Sans → MiSans → 微软雅黑 UI）。"
+               "字体缺中文字形时，中文会自动回退到系统字体。")
         f.switch("island.exclude_from_capture", "出现在截图和录屏里",
                  "关闭时灵动岛不会出现在截图 / 录屏中；取毛玻璃背景时会临时排除自己。", invert=True)
         f.number("island.blur_fps", "背景刷新率", "毛玻璃跟随身后画面的速度。越高越跟手，越费 CPU。",

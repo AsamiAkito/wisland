@@ -29,6 +29,7 @@ DEFAULTS: dict = {
         "pos": 0.5,                 # 沿边位置 0..1
         "screen": 0,
         "theme": "auto",            # auto / light / dark
+        "font_family": "",          # 自定义字体（本机字体库里的 family 名）；空 = 内置字体栈
         "hide_fullscreen": False,      # True = 前台全屏（游戏/视频）时隐藏灵动岛
         "keep_on_top": True,           # True = 始终置顶（默认）；False = 允许被其他窗口盖住
         "hover_expand_ms": 120,

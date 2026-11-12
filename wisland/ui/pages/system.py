@@ -60,7 +60,8 @@ def styled_menu(parent=None) -> QtWidgets.QMenu:
     m.setWindowFlag(Qt.WindowType.NoDropShadowWindowHint)
     bg, fg, sel = theme.menu_qss()
     m.setStyleSheet(
-        f"QMenu{{background:{bg};border-radius:14px;padding:6px;color:{fg};font-family:'HarmonyOS Sans','Microsoft YaHei UI';font-size:13px}}"
+        f"QMenu{{background:{bg};border-radius:14px;padding:6px;color:{fg};"
+        f"font-family:{theme.font_css()};font-size:13px}}"
         f"QMenu::item{{padding:6px 22px 6px 14px;border-radius:9px}}"
         f"QMenu::item:selected{{background:{sel}}}"
         f"QMenu::item:disabled{{color:gray}}"

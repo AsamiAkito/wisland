@@ -33,7 +33,6 @@ class NavBar(QtWidgets.QWidget):
         self.index = 0
         self.setFixedHeight(height)
         self.setMouseTracking(True)
-        self.font_ = ui_font(12.5, W.DemiBold)
         self.anchor_fn = None          # 返回第一个标签（主页）中心应对齐的 x（导航栏坐标），None = 整组居中
         self.w: list[Spring] = []
         self.hover: list[Spring] = []
@@ -55,8 +54,7 @@ class NavBar(QtWidgets.QWidget):
         """重建标签组（开关某个板块时用），尽量保留当前选中的标签。"""
         cur = self.current() if self.items else None
         self.items = list(items)
-        fm = QtGui.QFontMetrics(self.font_)
-        self.full_w = [ICON_W + fm.horizontalAdvance(lbl) + 46 for _, _, lbl in self.items]   # 选中时文字右侧留出更大空白
+        self._measure()
         self.w = [Spring(ICON_W, 260, 0.56, 0.05) for _ in self.items]
         self.hover = [Spring(0, 400, 1.0, 0.01) for _ in self.items]
         keys = self.keys()
@@ -68,6 +66,24 @@ class NavBar(QtWidgets.QWidget):
             self.w[self.index].snap(self.full_w[self.index])
         self.update()
         self._kick()
+
+    @property
+    def font_(self) -> QtGui.QFont:
+        return ui_font(12.5, W.DemiBold)
+
+    def _measure(self):
+        fm = QtGui.QFontMetrics(self.font_)
+        self.full_w = [ICON_W + fm.horizontalAdvance(lbl) + 46 for _, _, lbl in self.items]   # 选中时文字右侧留出更大空白
+
+    def refresh_fonts(self):
+        """设置里换了字体：标签宽度跟着变，重新量一遍并回到当前项。"""
+        if not self.items:
+            return
+        self._measure()
+        if self.w:
+            self.index = min(self.index, len(self.w) - 1)
+            self.w[self.index].snap(self.full_w[self.index])
+        self.update()
 
     def add_right_button(self, glyph: str, tip: str, cb) -> IconButton:
         b = IconButton(glyph, 30, 13, tip, self)

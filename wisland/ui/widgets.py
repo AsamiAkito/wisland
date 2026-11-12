@@ -162,6 +162,10 @@ class PillButton(Hoverable):
         self._fit()
         self.update()
 
+    def refresh_fonts(self):
+        self._fit()
+        self.update()
+
     def paintEvent(self, e):
         p = painter(self)
         r = QtCore.QRectF(self.rect()).adjusted(1, 1, -1, -1)
@@ -195,7 +199,7 @@ class Label(QtWidgets.QWidget, Themed):
                  color: QtGui.QColor | None = None, wrap: bool = False):
         super().__init__(parent)
         self._text = text
-        self.font_ = ui_font(px, weight, num)
+        self._px, self._weight, self._num = px, weight, num
         self.level = level
         self.align = align
         self.color = color
@@ -206,6 +210,11 @@ class Label(QtWidgets.QWidget, Themed):
         self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred if not wrap else QtWidgets.QSizePolicy.Policy.Expanding,
                            QtWidgets.QSizePolicy.Policy.Fixed if not wrap else QtWidgets.QSizePolicy.Policy.Expanding)
         self._hook_theme()
+
+    @property
+    def font_(self) -> QtGui.QFont:
+        """每次取都按当前字体设置生成，设置里换字体后不用重建控件。"""
+        return ui_font(self._px, self._weight, self._num)
 
     def sizeHint(self):
         fm = QtGui.QFontMetrics(self.font_)
@@ -220,6 +229,13 @@ class Label(QtWidgets.QWidget, Themed):
             self._text = t
             self.updateGeometry()
             self.update()
+
+    def refresh_fonts(self):
+        """换字体后重算固定高度（宽高会随新字体的字形变化）。"""
+        if not self.wrap:
+            self.setFixedHeight(QtGui.QFontMetrics(self.font_).height() + 2)
+        self.updateGeometry()
+        self.update()
 
     def text(self) -> str:
         return self._text
@@ -439,6 +455,11 @@ class Segmented(QtWidgets.QWidget, Themed):
             self._t.start()
             if emit:
                 self.changed.emit(i)
+
+    def refresh_fonts(self):
+        fm = QtGui.QFontMetrics(ui_font(12, W.Medium))
+        self.setMinimumWidth(sum(fm.horizontalAdvance(t) + 24 for t in self.items))
+        self.update()
 
     def _tick(self):
         self.pos_.step(0.016)
