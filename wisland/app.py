@@ -8,6 +8,7 @@ import sys
 import time
 import traceback
 import winreg
+from pathlib import Path
 from types import SimpleNamespace
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -111,9 +112,47 @@ def set_autostart(on: bool):
                 pass
 
 
+_QT_TRANSLATORS: list = []
+
+
+def install_qt_chinese(app: QtWidgets.QApplication) -> bool:
+    """让 Qt 自带的界面文字显示中文。
+
+    输入框右键菜单（撤销 / 重做 / 剪切 / 复制 / 粘贴 / 删除 / 全选）以及
+    QInputDialog 等标准对话框的按钮，都由 qtbase 翻译提供；不装翻译时 Qt
+    会回退到英文。打包后翻译文件在 PySide6/translations 下。
+    """
+    dirs: list[Path] = []
+    try:
+        qm_dir = QtCore.QLibraryInfo.path(QtCore.QLibraryInfo.LibraryPath.TranslationsPath)
+    except (AttributeError, RuntimeError):
+        qm_dir = ""
+    if qm_dir:
+        dirs.append(Path(qm_dir))
+    try:
+        import PySide6
+        pkg_dir = Path(PySide6.__file__).resolve().parent / "translations"
+        if pkg_dir not in dirs:
+            dirs.append(pkg_dir)
+    except (ImportError, TypeError):
+        pass
+    for d in dirs:
+        if not (d / "qtbase_zh_CN.qm").is_file():
+            continue
+        tr = QtCore.QTranslator(app)
+        if tr.load("qtbase_zh_CN", str(d)):
+            app.installTranslator(tr)
+            _QT_TRANSLATORS.append(tr)      # QTranslator 不能交给 GC，否则翻译失效
+            print(f"[i18n] 已加载 Qt 中文翻译：{d / 'qtbase_zh_CN.qm'}")
+            return True
+    print("[i18n] 没找到 qtbase_zh_CN.qm，输入框右键菜单等 Qt 自带文字可能仍是英文")
+    return False
+
+
 def main():
     QtCore.QCoreApplication.setAttribute(QtCore.Qt.ApplicationAttribute.AA_DontCreateNativeWidgetSiblings)
     app = QtWidgets.QApplication(sys.argv)
+    install_qt_chinese(app)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("wisland")
     bg.init()
