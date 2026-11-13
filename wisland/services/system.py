@@ -40,7 +40,8 @@ class RadioService(QtCore.QObject):
     """
 
     changed = QtCore.Signal(dict)
-    POLL_S = 5.0
+    # 只读开关状态（Radio API，开销很小）；控制页打开时会立即刷新一次
+    POLL_S = 30.0
 
     def __init__(self, parent=None):
         super().__init__(parent)

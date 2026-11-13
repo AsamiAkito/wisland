@@ -64,7 +64,7 @@ if errorlevel 1 (
 
 echo.
 echo Checking dependencies actually installed in .venv ...
-"%VPY%" -c "import importlib.util,sys; mods=['PySide6','psutil','httpx','pycaw','comtypes','yaml','numpy','winrt.windows.media.control','soundcard','sherpa_onnx','huggingface_hub','fugashi','unidic_lite','genanki']; missing=[m for m in mods if importlib.util.find_spec(m) is None]; print('Missing in .venv: '+', '.join(missing) if missing else 'Dependencies OK'); sys.exit(1 if missing else 0)"
+"%VPY%" -c "import importlib.util,sys; mods=['PySide6','psutil','httpx','pycaw','comtypes','yaml','numpy','winrt.windows.media.control','winrt.runtime','soundcard','sherpa_onnx','huggingface_hub','fugashi','unidic_lite','genanki']; missing=[m for m in mods if importlib.util.find_spec(m) is None]; print('Missing in .venv: '+', '.join(missing) if missing else 'Dependencies OK'); sys.exit(1 if missing else 0)"
 if errorlevel 1 (
     echo.
     echo [x] pip finished, but the packages are still missing from .venv.

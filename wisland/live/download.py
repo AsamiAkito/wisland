@@ -18,6 +18,7 @@ import httpx
 
 from .. import __version__ as APP_VERSION
 
+from .http_util import system_proxy
 from .paths import models_dir
 
 MODEL_REPO = "csukuangfj/sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8"
@@ -37,7 +38,24 @@ class DownloadCancelled(Exception):
 
 def _hf_urls(name: str) -> list[str]:
     path = f"{MODEL_REPO}/resolve/main/{name}"
-    return [f"{HF_HOST}/{path}", f"{MIRROR_HOST}/{path}"]
+    hosts: list[str] = []
+    env = (os.environ.get("HF_ENDPOINT") or "").strip().rstrip("/")
+    for host in (env, HF_HOST, MIRROR_HOST):
+        if host and host not in hosts:
+            hosts.append(host)
+    return [f"{host}/{path}" for host in hosts]
+
+
+def _clients() -> list[httpx.Client]:
+    timeout = httpx.Timeout(30.0, connect=10.0, read=30.0)
+    hdr = {"User-Agent": UA}
+    out: list[httpx.Client] = []
+    proxy = system_proxy()
+    if proxy:
+        out.append(httpx.Client(proxy=proxy, timeout=timeout, follow_redirects=True,
+                                headers=hdr, trust_env=False))
+    out.append(httpx.Client(timeout=timeout, follow_redirects=True, headers=hdr, trust_env=False))
+    return out
 
 
 def model_specs() -> list[dict]:
@@ -139,7 +157,7 @@ def _stream_to_part(client: httpx.Client, url: str, part: Path, cancel: threadin
     raise IOError("服务器不支持断点续传")
 
 
-def _download_spec(client: httpx.Client, spec: dict, cancel: threading.Event,
+def _download_spec(clients: list[httpx.Client], spec: dict, cancel: threading.Event,
                    progress, note) -> int:
     dest = spec["dest"]
     expected = int(spec.get("size") or 0)
@@ -151,19 +169,20 @@ def _download_spec(client: httpx.Client, spec: dict, cancel: threading.Event,
     last = None
     urls = spec.get("urls") or []
     for i, url in enumerate(urls):
-        try:
-            _stream_to_part(client, url, part, cancel, progress)
-            if expected and part.stat().st_size != expected:
-                raise IOError("文件大小校验失败")
-            os.replace(part, dest)
-            return dest.stat().st_size
-        except DownloadCancelled:
-            raise
-        except Exception as e:  # noqa: BLE001
-            last = e
-            if i + 1 < len(urls):
-                note("下载源连接失败，改用备用镜像…")
-            continue
+        for client in clients:
+            try:
+                _stream_to_part(client, url, part, cancel, progress)
+                if expected and part.stat().st_size != expected:
+                    raise IOError("文件大小校验失败")
+                os.replace(part, dest)
+                return dest.stat().st_size
+            except DownloadCancelled:
+                raise
+            except Exception as e:  # noqa: BLE001
+                last = e
+                continue
+        if i + 1 < len(urls):
+            note("下载源连接失败，改用备用镜像…")
     raise last or IOError("下载失败")
 
 
@@ -176,13 +195,12 @@ def download_models(cancel: threading.Event | None = None, progress=None, note=N
     if models_ready():
         return
     note("正在检查模型文件…")
-    timeout = httpx.Timeout(30.0, connect=10.0, read=30.0)
-    with httpx.Client(timeout=timeout, follow_redirects=True,
-                      headers={"User-Agent": UA}) as client:
+    clients = _clients()
+    try:
         for spec in specs:
             if cancel.is_set():
                 raise DownloadCancelled()
-            spec["size"] = _probe_size(client, spec, cancel)
+            spec["size"] = _probe_size(clients[0], spec, cancel)
         total = sum(int(s.get("size") or 0) for s in specs)
         done_base = 0
         for spec in specs:
@@ -200,11 +218,14 @@ def download_models(cancel: threading.Event | None = None, progress=None, note=N
             def on_progress(done: int, _file_total: int, base=done_base, label=label):
                 progress(base + done, total or (base + _file_total), label)
 
-            got = _download_spec(client, spec, cancel, on_progress, note)
+            got = _download_spec(clients, spec, cancel, on_progress, note)
             done_base += got
             if not total or done_base > total:
                 total = done_base
             progress(done_base, total, label)
+    finally:
+        for client in clients:
+            client.close()
     if not models_ready():
         raise IOError("模型文件下载完成但校验失败，请重试")
     progress(total, total, "模型已就绪")

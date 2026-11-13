@@ -654,7 +654,8 @@ class TranslatePage(Page):
         self.level = LevelBar()
         clear = IconButton(G.TRASH, 30, 12, "清空")
         self.view = LiveView()
-        self.view.hint = "播放日语视频后点「开始聆听」"
+        self.view.hint = "播放日语视频后点「开始聆听」" + (
+            "" if ctx.live.available()[0] else "\n（第一次使用会先自动下载约 630MB 的识别模型）")
         clear.clicked.connect(self.view.clear)
         live_card = Card(radius=16)
         live_card.setLayout(vbox((self.view, 1), margins=(10, 8, 10, 8)))
