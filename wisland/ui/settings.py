@@ -32,7 +32,7 @@ from .. import (APP_NAME, APP_NAME_CN, APP_TAGLINE, AUTHOR_NAME, AUTHOR_URL,
                 __version__ as APP_VERSION)
 from ..core.bg import run_bg, ui as bg_ui
 from ..core.config import CONFIG_PATH, DATA_DIR, DEFAULTS, ROOT, cfg, expand
-from ..services import updater
+from ..services import packaged_update, updater
 from .brand import asset_path
 from .popup import POPUP_POSITIONS
 from .theme import G, THEME_NAMES, W, icon_font, theme, ui_font
@@ -2526,7 +2526,9 @@ class UpdatePanel(QtWidgets.QWidget):
         self._current = self._running       # 向后兼容：界面比较始终以运行版本为准
         self._pending = False
         self._pending_version = ""
-        self._frozen = not updater.can_self_update()
+        self._packaged = packaged_update.is_frozen()
+        self._packaged_version = ""
+        self._update_seq = 0
 
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(10, 8, 10, 10)
@@ -2565,9 +2567,9 @@ class UpdatePanel(QtWidgets.QWidget):
         buttons.setSpacing(8)
         self.check_btn = Button("检查更新", G.REFRESH)
         self.check_btn.clicked.connect(self.check)
-        self.download_btn = Button("打开开源仓库" if self._frozen else "下载并更新", G.DOWN)
-        # 打包版即使检查失败也允许直接打开开源仓库
-        self.download_btn.setEnabled(self._frozen)
+        self.download_btn = Button("下载并更新", G.DOWN)
+        # 检查到更新前保持禁用；打包版在“同版本 / 更低版本”时也保持禁用
+        self.download_btn.setEnabled(False)
         self.download_btn.clicked.connect(self._download_clicked)
         self.restart_btn = Button("立即重启", G.POWER, variant="primary")
         self.restart_btn.clicked.connect(self._restart_clicked)
@@ -2583,8 +2585,11 @@ class UpdatePanel(QtWidgets.QWidget):
         lay.addLayout(buttons)
 
         self.hint = TLabel(
-            "打包版不能替换正在运行的 exe；请从开源仓库下载新版压缩包手动替换。"
-            if self._frozen else
+            "更新会下载对应版本的压缩包，退出后自动替换 exe 与 _internal 并重启；"
+            "config.json、data、models 会保留；旧版本备份在 data/updates，只保留最近一份。"
+            "替换失败会自动回滚；若新版本启动失败，可用备份手动回滚。"
+            "更新过程中 wisland 会退出并自动重启。"
+            if self._packaged else
             "更新会保留 config.json、data、models、.venv；完成后会自动重启 wisland。"
             "更新前会备份到 data/updates，失败自动回滚。",
             11, W.Normal, "desc", wrap=True)
@@ -2594,7 +2599,12 @@ class UpdatePanel(QtWidgets.QWidget):
         self._restart_timer = QtCore.QTimer(self, singleShot=True)
         self._restart_timer.timeout.connect(self._auto_restart)
 
-        self._detect_pending()
+        if self._packaged:
+            # 打包版的版本号编译在 exe 里，不存在“替换完只差重启”的 pending 状态；
+            # 这里只展示上一次 helper 写回的更新结果。
+            self._show_packaged_result()
+        else:
+            self._detect_pending()
 
     # ---- 生命周期 ----
     def showEvent(self, e):
@@ -2696,10 +2706,13 @@ class UpdatePanel(QtWidgets.QWidget):
     def _can_download(self) -> bool:
         if self._pending:
             return False
-        if self._frozen:
-            return bool(self._remote)
         if not self._remote:
             return False
+        if self._packaged:
+            try:
+                return updater.version_tuple(self._remote) > updater.version_tuple(self._running)
+            except updater.UpdateError:
+                return False
         try:
             return updater.version_tuple(self._remote) >= updater.version_tuple(self._running)
         except updater.UpdateError:
@@ -2744,15 +2757,19 @@ class UpdatePanel(QtWidgets.QWidget):
         self.download_btn.set_variant("ghost")
         current_text = f"v{self._running}"
 
-        if self._frozen:
-            self.download_btn.set_text("打开开源仓库")
-            self.download_btn.setEnabled(True)
+        if self._packaged:
+            self.download_btn.set_text("下载并更新")
+            self.download_btn.set_variant("ghost")
             if remote_t > current_t:
                 self._set_status(f"发现新版本 v{remote}（当前 {current_text}）", "accent")
+                self.download_btn.set_variant("primary")
+                self.download_btn.setEnabled(True)
             elif remote_t == current_t:
                 self._set_status(f"已是最新版本 {current_text}", "ok")
+                self.download_btn.setEnabled(False)
             else:
                 self._set_status(f"线上版本 v{remote} 低于当前版本 {current_text}", "hint")
+                self.download_btn.setEnabled(False)
             return
 
         if remote_t > current_t:
@@ -2781,20 +2798,15 @@ class UpdatePanel(QtWidgets.QWidget):
         self.check_btn.setEnabled(True)
         self.check_btn.set_variant("ghost")
         self.download_btn.set_variant("ghost")
-        if self._frozen:
-            self.download_btn.set_text("打开开源仓库")
-            self.download_btn.setEnabled(True)
-        else:
-            self.download_btn.set_text("下载并更新")
-            self.download_btn.setEnabled(False)
+        self.download_btn.set_text("下载并更新")
+        self.download_btn.setEnabled(False)
 
     # ---- 下载 / 更新 ----
     def _download_clicked(self):
         if not self._alive or self._pending or self._checking or self._updating:
             return
-        if self._frozen:
-            if not _open_url(REPO_URL):
-                self._set_status(f"无法打开浏览器，请手动访问 {REPO_URL}", "danger")
+        if self._packaged:
+            self._packaged_download_clicked()
             return
         if not self._can_download():
             return
@@ -2898,14 +2910,12 @@ class UpdatePanel(QtWidgets.QWidget):
             self.check_btn.setEnabled(True)
             self.check_btn.set_variant("ghost")
             self.download_btn.set_variant("ghost")
-            if self._frozen:
-                self.download_btn.set_text("打开开源仓库")
+            if self._packaged:
+                self.download_btn.set_text("下载并更新")
+            if self._can_download():
                 self.download_btn.setEnabled(True)
             else:
-                if self._can_download():
-                    self.download_btn.setEnabled(True)
-                else:
-                    self.download_btn.setEnabled(False)
+                self.download_btn.setEnabled(False)
         except RuntimeError:
             return
         self.remote_label.set_role("title")
@@ -2917,6 +2927,191 @@ class UpdatePanel(QtWidgets.QWidget):
         self._set_status(f"更新失败：{message}", "danger")
         backup = getattr(exc, "backup", None)
         self._set_detail(f"备份位置：{backup}" if backup else "")
+
+    # ---- 打包版：下载 → 退出 → helper 替换 ----
+    def _show_packaged_result(self):
+        """打开关于页时展示上次 helper 写回的结果；展示后立即清除，避免重复提示。"""
+        try:
+            result = packaged_update.read_result(ROOT)
+        except Exception:  # noqa: BLE001 - 读结果失败不应影响设置窗口
+            return
+        if not result:
+            return
+        try:
+            packaged_update.clear_result(ROOT)
+        except Exception:  # noqa: BLE001
+            pass
+        # 让启动结果留在界面上，不马上被自动检查覆盖；用户仍可以手动点「检查更新」
+        self._auto_checked = True
+
+        version = str(result.get("version") or "")
+        old = str(result.get("old_version") or "")
+        backup = str(result.get("backup") or "")
+        if result.get("status") == "ok":
+            text = f"已更新到 v{version}" if version else "已更新到新版本"
+            if backup:
+                text += f"（旧版备份：{backup}）"
+            self._set_status(text, "ok")
+            parts = [f"从 v{old} 更新而来"] if old else []
+            backups = result.get("backups") or []
+            names = ([Path(str(path)).name for path in backups]
+                     if isinstance(backups, list) else [])
+            if names:
+                parts.append("备份文件：" + "、".join(names[:4]))
+            parts.append("如需回滚，请退出 wisland 后把备份文件改回原名")
+            self._set_detail("；".join(parts) + "。")
+            try:
+                self.progress.show()
+                self.progress.set_indeterminate(False)
+                self.progress.set_value(1.0)
+            except RuntimeError:
+                pass
+            return
+
+        message = str(result.get("message") or "上次更新没有完成。")
+        self._set_status(f"上次更新失败：{message}", "danger")
+        parts = [f"备份位置：{backup}"] if backup else []
+        parts.append("可退出 wisland 后把 data/updates 里的 *.old-* 备份改回原名恢复旧版本")
+        self._set_detail("；".join(parts) + "。")
+
+    def _packaged_download_clicked(self):
+        """打包版：确认后后台下载并校验，成功后再启动 helper 退出替换。"""
+        if not self._alive or self._checking or self._updating:
+            return
+        if not self._can_download():
+            return
+        version = self._remote
+        dirty = 0
+        try:
+            dirty = len(self.win._changed())
+        except Exception:  # noqa: BLE001 - 窗口正在销毁时按无未保存处理
+            dirty = 0
+        text = (f"将下载 wisland v{version} 的打包版压缩包（约 100 MB 以上），"
+                "然后退出 wisland、替换 exe 与 _internal 并自动重启。\n"
+                "config.json、data/、models/ 会保留；旧版本备份在 data/updates。")
+        if dirty:
+            text += f"\n还有 {dirty} 项设置修改未保存，更新重启后会丢失。"
+        if not Confirm.ask(self.win, f"下载并更新到 v{version}？", text,
+                           ok_text="下载并更新", danger=True):
+            return
+
+        self._updating = True
+        self._update_seq += 1
+        self._packaged_version = version
+        self._result = None
+        self._cancel = threading.Event()
+        self.check_btn.setEnabled(False)
+        self.download_btn.setEnabled(False)
+        self.check_btn.set_variant("ghost")
+        self.download_btn.set_variant("ghost")
+        self.restart_btn.hide()
+        self.cancel_btn.setEnabled(True)
+        self.cancel_btn.show()
+        self._set_detail("")
+        self.progress.show()
+        self.progress.set_indeterminate(False)
+        self.progress.set_value(0.0)
+        self._set_status(f"正在准备下载 v{version}…", "accent", 0)
+        run_bg(packaged_update.prepare_update, version, self._cancel,
+               self._progress_from_worker, self._status_from_worker,
+               on_done=self._packaged_ready, on_error=self._packaged_failed)
+
+    def _packaged_ready(self, prepared):
+        """下载 / 解压 / 校验完成：写任务、启动 helper，然后退出 Qt。"""
+        prepared = prepared if isinstance(prepared, dict) else {}
+        version = str(prepared.get("version") or self._packaged_version or self._remote)
+        if not self._alive:
+            # 窗口在下载期间被关闭：不要启动 helper，直接清掉 stage
+            self._discard_stage_async(version, self._update_seq)
+            return
+        if self._cancel.is_set():
+            # prepare_update 已完成、on_done 才排队时用户点了取消：不能替换 / 退出
+            self._packaged_failed(updater.UpdateCancelled("更新已取消。"), version)
+            return
+        self._updating = False
+        self._cancel.clear()
+        if not version or not prepared.get("stage"):
+            self._packaged_failed(updater.UpdateError("更新包没有准备好，请重试。"), version)
+            return
+        try:
+            started = packaged_update.spawn_helper(ROOT, prepared)
+        except Exception:  # noqa: BLE001 - 启动助手失败不能把设置窗口带崩
+            started = False
+        if not started:
+            packaged_update.clear_job(ROOT)
+            self._packaged_failed(updater.UpdateError(
+                "无法启动更新助手，请检查杀毒软件或目录权限后重试。"), version)
+            return
+
+        self.cancel_btn.hide()
+        self.check_btn.setEnabled(False)
+        self.download_btn.setEnabled(False)
+        self.progress.show()
+        self.progress.set_indeterminate(False)
+        self.progress.set_value(1.0)
+        self.remote_label.setText(f"v{version}")
+        self._set_status(f"已下载 v{version}，正在退出并替换…", "accent", 100)
+        self._set_detail(
+            "更新过程中 wisland 会退出并自动重启；config.json、data、models 会保留。")
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            QtCore.QTimer.singleShot(200, app.quit)
+
+    def _packaged_failed(self, exc, version: str | None = None):
+        """打包版下载 / 校验 / 启动助手失败：恢复按钮并清理大文件。"""
+        version = version or self._packaged_version or self._remote
+        self._discard_stage_async(version, self._update_seq)
+        if not self._alive:
+            return
+        self._updating = False
+        self._cancel.clear()
+        try:
+            self.progress.set_indeterminate(False)
+            self.progress.set_value(0.0)
+            self.progress.hide()
+            self.cancel_btn.hide()
+            self.cancel_btn.setEnabled(True)
+            self.restart_btn.hide()
+            self.check_btn.setEnabled(True)
+            self.check_btn.set_variant("ghost")
+            self.download_btn.set_text("下载并更新")
+            self.download_btn.set_variant("ghost")
+            self.download_btn.setEnabled(self._can_download())
+        except RuntimeError:
+            return
+        self.remote_label.set_role("title")
+        if isinstance(exc, updater.UpdateCancelled):
+            self._set_status(str(exc) or "更新已取消。", "hint")
+            self._set_detail("")
+            return
+        message = str(exc) if isinstance(exc, updater.UpdateError) else "更新失败，请稍后重试。"
+        self._set_status(f"更新失败：{message}", "danger")
+        backup = getattr(exc, "backup", None)
+        self._set_detail(f"备份位置：{backup}" if backup else "")
+
+    def _discard_stage_async(self, version: str, seq: int | None = None):
+        """后台删掉本次 stage，避免失败 / 取消后留下上百 MB 文件。
+
+        如果用户马上又点了一次更新（``_update_seq`` 已经变化），就不要删，
+        否则可能把新一轮刚下载的 stage 一起清掉；新一轮 prepare 会自己清理旧目录。
+        """
+        version = str(version or "")
+        if not version:
+            return
+        panel = self
+
+        def task():
+            try:
+                if seq is not None and panel._update_seq != seq:
+                    return
+                packaged_update.discard_stage(ROOT, version)
+            except Exception:  # noqa: BLE001 - 清理失败留给下次启动的 cleanup_stale
+                pass
+
+        try:
+            threading.Thread(target=task, name="wisland-update-cleanup", daemon=True).start()
+        except RuntimeError:
+            pass
 
     def _schedule_auto_restart(self):
         """仅本次更新成功后调用：稍等片刻让用户看到“正在重启”，然后自动重启。"""

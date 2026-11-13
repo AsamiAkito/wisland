@@ -13,6 +13,7 @@ from types import SimpleNamespace
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from . import __version__ as APP_VERSION
 from .core import bg
 from .core.config import CONFIG_PATH, DATA_DIR, ROOT, cfg, expand
 
@@ -163,6 +164,12 @@ def main():
         print("wisland 已在运行")
         return 0
     fix_autostart()
+
+    # 打包版启动后顺手清理非当前版本的旧备份 / 过期更新包；源码模式不进入这条路径。
+    if getattr(sys, "frozen", False):
+        from .services import packaged_update
+
+        bg.run_bg(packaged_update.cleanup_stale, ROOT, APP_VERSION)
 
     from .services.audio import AudioService, BrightnessService
     from .services.apps import seed_open_apps
