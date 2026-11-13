@@ -22,12 +22,10 @@ from .http_util import system_proxy
 from .paths import models_dir
 
 MODEL_REPO = "csukuangfj/sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8"
+VAD_REPO = "csukuangfj/sherpa-onnx-vad-models"
 HF_HOST = "https://huggingface.co"
 MIRROR_HOST = "https://hf-mirror.com"
-VAD_URLS = [
-    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
-    "https://hf-mirror.com/csukuangfj/sherpa-onnx-vad-models/resolve/main/silero_vad.onnx",
-]
+VAD_GITHUB = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
 UA = f"wisland/{APP_VERSION} (live subtitle model downloader)"
 CHUNK = 256 * 1024
 
@@ -36,14 +34,29 @@ class DownloadCancelled(Exception):
     """用户取消；已写入的 .part 保留，下次从这里续传。"""
 
 
-def _hf_urls(name: str) -> list[str]:
-    path = f"{MODEL_REPO}/resolve/main/{name}"
+def _endpoints() -> list[str]:
     hosts: list[str] = []
     env = (os.environ.get("HF_ENDPOINT") or "").strip().rstrip("/")
     for host in (env, HF_HOST, MIRROR_HOST):
         if host and host not in hosts:
             hosts.append(host)
-    return [f"{host}/{path}" for host in hosts]
+    return hosts
+
+
+def _hf_urls(name: str) -> list[str]:
+    path = f"{MODEL_REPO}/resolve/main/{name}"
+    return [f"{host}/{path}" for host in _endpoints()]
+
+
+def _vad_urls() -> list[str]:
+    path = f"{VAD_REPO}/resolve/main/silero_vad.onnx"
+    urls = [f"{host}/{path}" for host in _endpoints()]
+    urls.insert(1, VAD_GITHUB)
+    out: list[str] = []
+    for url in urls:
+        if url not in out:
+            out.append(url)
+    return out
 
 
 def _clients() -> list[httpx.Client]:
@@ -52,8 +65,11 @@ def _clients() -> list[httpx.Client]:
     out: list[httpx.Client] = []
     proxy = system_proxy()
     if proxy:
-        out.append(httpx.Client(proxy=proxy, timeout=timeout, follow_redirects=True,
-                                headers=hdr, trust_env=False))
+        try:
+            out.append(httpx.Client(proxy=proxy, timeout=timeout, follow_redirects=True,
+                                    headers=hdr, trust_env=False))
+        except Exception:  # noqa: BLE001
+            pass
     out.append(httpx.Client(timeout=timeout, follow_redirects=True, headers=hdr, trust_env=False))
     return out
 
@@ -66,7 +82,7 @@ def model_specs() -> list[dict]:
          "label": "日语识别模型"},
         {"dest": para / "tokens.txt", "urls": _hf_urls("tokens.txt"),
          "label": "识别词表"},
-        {"dest": root / "silero_vad.onnx", "urls": VAD_URLS,
+        {"dest": root / "silero_vad.onnx", "urls": _vad_urls(),
          "label": "静音检测模型"},
     ]
 
@@ -86,30 +102,31 @@ def _part_path(dest: Path) -> Path:
     return dest.with_name(dest.name + ".part")
 
 
-def _probe_size(client: httpx.Client, spec: dict, cancel: threading.Event) -> int:
+def _probe_size(clients: list[httpx.Client], spec: dict, cancel: threading.Event) -> int:
     """尽力取得文件总大小；拿不到就返回 0（进度只显示已下载 MB）。"""
     for url in spec.get("urls") or []:
-        if cancel.is_set():
-            raise DownloadCancelled()
-        try:
-            r = client.head(url)
-            if r.status_code < 400:
-                n = r.headers.get("content-length")
-                if n and n.isdigit():
-                    return int(n)
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            r = client.get(url, headers={"Range": "bytes=0-0"})
-            if r.status_code in (200, 206):
-                m = re.search(r"/(\d+)\s*$", r.headers.get("content-range") or "")
-                if m:
-                    return int(m.group(1))
-                n = r.headers.get("content-length")
-                if n and n.isdigit():
-                    return int(n)
-        except Exception:  # noqa: BLE001
-            pass
+        for client in clients:
+            if cancel.is_set():
+                raise DownloadCancelled()
+            try:
+                r = client.head(url)
+                if r.status_code < 400:
+                    n = r.headers.get("content-length")
+                    if n and n.isdigit():
+                        return int(n)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                with client.stream("GET", url, headers={"Range": "bytes=0-0"}) as r:
+                    if r.status_code in (200, 206):
+                        m = re.search(r"/(\d+)\s*$", r.headers.get("content-range") or "")
+                        if m:
+                            return int(m.group(1))
+                        n = r.headers.get("content-length")
+                        if n and n.isdigit():
+                            return int(n)
+            except Exception:  # noqa: BLE001
+                pass
     return 0
 
 
@@ -200,8 +217,9 @@ def download_models(cancel: threading.Event | None = None, progress=None, note=N
         for spec in specs:
             if cancel.is_set():
                 raise DownloadCancelled()
-            spec["size"] = _probe_size(clients[0], spec, cancel)
+            spec["size"] = _probe_size(clients, spec, cancel)
         total = sum(int(s.get("size") or 0) for s in specs)
+        sizes_known = total > 0
         done_base = 0
         for spec in specs:
             if cancel.is_set():
@@ -211,21 +229,19 @@ def download_models(cancel: threading.Event | None = None, progress=None, note=N
             expected = int(spec.get("size") or 0)
             if dest.is_file() and dest.stat().st_size > 0 and (not expected or dest.stat().st_size == expected):
                 done_base += dest.stat().st_size
-                progress(done_base, total, label)
+                progress(done_base, total if sizes_known else done_base, label)
                 continue
             note(f"正在下载{label}…")
 
             def on_progress(done: int, _file_total: int, base=done_base, label=label):
-                progress(base + done, total or (base + _file_total), label)
+                progress(base + done, total if sizes_known else (base + _file_total), label)
 
             got = _download_spec(clients, spec, cancel, on_progress, note)
             done_base += got
-            if not total or done_base > total:
-                total = done_base
-            progress(done_base, total, label)
+            progress(done_base, total if sizes_known else done_base, label)
     finally:
         for client in clients:
             client.close()
     if not models_ready():
         raise IOError("模型文件下载完成但校验失败，请重试")
-    progress(total, total, "模型已就绪")
+    progress(total if sizes_known else done_base, total if sizes_known else done_base, "模型已就绪")
