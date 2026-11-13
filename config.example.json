@@ -7,6 +7,7 @@
     "font_family": "",
     "hide_fullscreen": false,
     "keep_on_top": true,
+    "hover_expand": true,
     "hover_expand_ms": 120,
     "collapse_delay_ms": 320,
     "exclude_from_capture": false,

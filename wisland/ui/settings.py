@@ -3615,9 +3615,13 @@ class SettingsWindow(QtWidgets.QWidget):
 
         f.section("展开与收起")
         f.choice("island.expand_mode", "展开方式",
-                 "悬停 = 鼠标移上去展开；常驻 = 一直展开；长关 = 悬停 / 单击都不展开，双击灵动岛可以切回来。",
+                 "悬停 = 鼠标移上去展开（关闭「悬停默认展开」后改为单击展开）；常驻 = 一直展开；"
+                 "长关 = 悬停 / 单击都不展开，双击灵动岛可以切回来。",
                  [("hover", "悬停展开"), ("always", "常驻展开"), ("never", "长关")], width=160)
-        f.number("island.hover_expand_ms", "悬停多少毫秒后展开", "防止鼠标路过时误展开。",
+        f.switch("island.hover_expand", "悬停默认展开",
+                 "开启后鼠标移到灵动岛就自动展开；关闭后需要单击灵动岛才展开，按住拖拽不算点击。")
+        f.number("island.hover_expand_ms", "悬停多少毫秒后展开",
+                 "仅在开启「悬停默认展开」时生效，防止鼠标路过时误展开。",
                  0, 1000, step=10, suffix="毫秒")
         f.number("island.collapse_delay_ms", "移开后多少毫秒收起", "鼠标离开后等待的时间。",
                  0, 2000, step=20, suffix="毫秒")

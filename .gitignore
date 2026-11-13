@@ -24,3 +24,6 @@ dist/
 builddeps/
 .venv-build/
 packaging/
+
+# 本地 PR 描述与提交材料
+.shiroki/

@@ -1220,7 +1220,9 @@ class Island(QtWidgets.QWidget):
         if inside:
             self._out_since = None
             if not self.expanded and self.expand_mode() != "never":
-                if self._hover_since is None:
+                if not self.hover_expand():
+                    self._hover_since = None   # 关闭悬停展开：不累计计时，重新打开时不会立刻展开
+                elif self._hover_since is None:
                     self._hover_since = now
                 elif (now - self._hover_since) * 1000 >= cfg.get("island.hover_expand_ms", 220) \
                         and not (user32.GetAsyncKeyState(0x01) & 0x8000):
@@ -1392,6 +1394,10 @@ class Island(QtWidgets.QWidget):
         self.mode = "anchored"
         self._place_nav()
         self._kick()
+
+    def hover_expand(self) -> bool:
+        """True = 鼠标悬停自动展开（默认）；False = 单击展开，按住拖拽不算点击。"""
+        return bool(cfg.get("island.hover_expand", True))
 
     def expand_mode(self) -> str:
         m = cfg.get("island.expand_mode")
