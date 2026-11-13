@@ -20,12 +20,14 @@ from urllib.parse import quote
 import httpx
 from PySide6 import QtCore
 
+from .. import __version__ as APP_VERSION
+
 from wisland.core.bg import run_bg, ui
 from wisland.core.config import cfg
 
 API = "https://music.163.com/api"
 LRCLIB = "https://lrclib.net/api"
-LRCLIB_UA = "wisland/1.4.0 (desktop lyrics client)"
+LRCLIB_UA = f"wisland/{APP_VERSION} (desktop lyrics client)"
 HEADERS = {"Referer": "https://music.163.com/", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 LRCLIB_HEADERS = {"User-Agent": LRCLIB_UA, "Accept": "application/json"}
 _TS = re.compile(r"\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]")

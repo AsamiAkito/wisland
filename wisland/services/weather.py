@@ -33,6 +33,8 @@ from typing import Callable
 import httpx
 from PySide6 import QtCore
 
+from .. import __version__ as APP_VERSION
+
 from wisland.core.bg import run_bg, ui
 from wisland.core.config import cfg
 from wisland.live.http_util import system_proxy
@@ -51,7 +53,7 @@ IP_WHO = "https://ipwho.is/"
 IP_SB = "https://api.ip.sb/geoip"
 IP_IPIP = "https://myip.ipip.net/"
 IP_TIMEOUT = httpx.Timeout(5.0, connect=2.5)
-UA = "wisland/1.6.3 (weather; +https://github.com/Misaka273/wisland)"
+UA = f"wisland/{APP_VERSION} (weather; +https://github.com/Misaka273/wisland)"
 GEO_TIMEOUT = httpx.Timeout(10.0, connect=4.0)
 
 _COORDS = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*[,，\s]\s*(-?\d+(?:\.\d+)?)\s*$")

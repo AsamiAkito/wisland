@@ -16,6 +16,8 @@ from pathlib import Path
 
 import httpx
 
+from .. import __version__ as APP_VERSION
+
 from .paths import models_dir
 
 MODEL_REPO = "csukuangfj/sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8"
@@ -25,7 +27,7 @@ VAD_URLS = [
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
     "https://hf-mirror.com/csukuangfj/sherpa-onnx-vad-models/resolve/main/silero_vad.onnx",
 ]
-UA = "wisland/1.5.0 (live subtitle model downloader)"
+UA = f"wisland/{APP_VERSION} (live subtitle model downloader)"
 CHUNK = 256 * 1024
 
 
