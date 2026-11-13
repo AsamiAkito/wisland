@@ -32,7 +32,7 @@ DEFAULTS: dict = {
         "font_family": "",          # 自定义字体（本机字体库里的 family 名）；空 = 内置字体栈
         "hide_fullscreen": False,      # True = 前台全屏（游戏/视频）时隐藏灵动岛
         "keep_on_top": True,           # True = 始终置顶（默认）；False = 允许被其他窗口盖住
-        "hover_expand": True,          # False = 悬停不自动展开，单击才展开；按住拖拽不算点击
+        "hover_expand": True,          # False = 悬停不自动展开，单击才展开；长按 / 拖拽不算点击
         "hover_expand_ms": 120,
         "collapse_delay_ms": 320,
         "exclude_from_capture": False,  # False = 灵动岛出现在截图 / 录屏里（取背景时只临时排除自己）

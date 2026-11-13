@@ -3,7 +3,7 @@
 
 几何有三种模式：
 - anchored：吸附在某条屏幕边上，贴边一侧与屏幕边缘通过两侧"表面张力"内凹圆角相连；
-- drag：长按后跟随鼠标（弹簧跟随产生拖拽惯性），本体按速度变成泪滴形；
+- drag：按住并移动后跟随鼠标（弹簧跟随产生拖拽惯性），本体按速度变成泪滴形；
          离开原边缘时液桥被拉长、变细，超过阈值后断开，边缘残留的小水滴缩回；
          靠近任意边缘时会重新"伸出"液桥；
 - snap：松手后吸附到最近的边，垂直方向欠阻尼弹簧带回弹，冲过边缘时转化为挤压形变。
@@ -39,6 +39,8 @@ FILLET = 13.0                    # 贴边两侧内凹圆角
 BREAK = 64.0                     # 液桥拉断距离
 JOIN = 30.0                      # 靠近到这个距离时液桥伸出
 EDGE_MARGIN = 6
+LONG_PRESS_MS = 420              # 按住超过这么久算长按：不展开（长按多半是想拖动或误按）
+DRAG_SLOP_MIN = 8                # 至少 8 逻辑像素：单击时的手抖不再被当成拖动
 
 # 新消息呼吸灯的光带剖面 (t, α)：t = 离吸附边的距离 / 光带厚度。
 # 最前面 7% 是贴着边的那根亮线，之后迅速衰减成余光，末端收到 0 —— 渐变到 0 才不会留下一条硬边。
@@ -280,6 +282,9 @@ class Island(QtWidgets.QWidget):
         self._hover_since = None
         self._out_since = None
         self._press: QtCore.QPointF | None = None
+        self._press_g: QtCore.QPointF | None = None
+        self._press_t0 = 0.0
+        self._pending_expand = False
         self._fs_hidden = False
         self._prev_fg = None
         self._registered_hotkeys: dict[int, str] = {}
@@ -325,7 +330,6 @@ class Island(QtWidgets.QWidget):
         self.timer.timeout.connect(self._tick)
         self.poll = QtCore.QTimer(self, interval=25, timeout=self._poll_hover)
         self.topmost_timer = QtCore.QTimer(self, interval=500, timeout=self._ensure_topmost)
-        self.lp_timer = QtCore.QTimer(self, singleShot=True, interval=420, timeout=self._long_press)
         self._click_timer = QtCore.QTimer(self, singleShot=True, timeout=self._single_click)
         self._dbl_filter = _BlankDoubleClick(self)
         QtWidgets.QApplication.instance().installEventFilter(self._dbl_filter)
@@ -540,6 +544,8 @@ class Island(QtWidgets.QWidget):
     def begin_drag(self, gpos: QtCore.QPoint | None = None):
         if self.mode == "drag" or self.passthrough():
             return
+        self._pending_expand = False
+        self._click_timer.stop()          # 单击后马上拖动：作废排队中的单击展开，别在拖动结束后又弹开
         gpos = QtCore.QPointF(gpos or QtGui.QCursor.pos())
         c = self.body.center() + QtCore.QPointF(self._win_origin)
         if self.expanded:
@@ -696,8 +702,12 @@ class Island(QtWidgets.QWidget):
         if self.mode == "snap" and self.along.rest and self.gap.rest:
             self.mode = "anchored"
             self._place_nav()
+            pending = self._pending_expand
+            self._pending_expand = False
             if self.pinned():
                 QtCore.QTimer.singleShot(80, self.expand)
+            elif pending:
+                self._single_click()
             R = self._avail()
             horiz = self.edge in ("top", "bottom")
             self.pos_frac = clamp(((self.along.x - R.left()) / R.width()) if horiz
@@ -1175,16 +1185,26 @@ class Island(QtWidgets.QWidget):
             return True
         return self.body.adjusted(-4, -4, 4, 4).contains(lp)
 
+    def _drag_slop(self) -> float:
+        """拖动阈值：用系统的拖动距离，避免单击时的轻微抖动被误判成拖动。"""
+        return max(DRAG_SLOP_MIN, int(QtWidgets.QApplication.startDragDistance()))
+
     def _poll_hover(self):
         # 输入框的键盘焦点：切到别的窗口后立即释放，否则会一直保持展开
         if "focus" in self.locks and user32.GetForegroundWindow() != int(self.winId()):
             self._prev_fg = None
             self.release_focus()
+        now = time.monotonic()
+        if self._press is not None and now - self._press_t0 > 1.5 \
+                and not (user32.GetAsyncKeyState(0x01) & 0x8000):
+            # 松手事件丢失的兜底：键早就抬起却还留着按下状态，清掉，避免之后一动就拖动
+            self._press = None
+            self._press_g = None
+            self._press_t0 = 0.0
         if self._fs_hidden or self.mode != "anchored":
             self._hover_since = self._out_since = None
             return
         inside = self._inside(QtGui.QCursor.pos())
-        now = time.monotonic()
         if not self.expanded and self.mode == "anchored" and not self._fs_hidden:
             # 收起时（任何展开方式）：鼠标靠近就把水滴"挤"一下，离开后带回弹地恢复
             # 只有鼠标进入灵动岛范围才挤压；越靠近中心挤压越强（边缘处几乎不变形）。
@@ -1246,14 +1266,20 @@ class Island(QtWidgets.QWidget):
             return
         if e.button() == Qt.MouseButton.LeftButton:
             self._press = e.position()
+            self._press_g = e.globalPosition()
+            self._press_t0 = time.monotonic()
         elif e.button() == Qt.MouseButton.RightButton:
             self.menu_requested.emit(e.globalPosition().toPoint())
 
     def mouseMoveEvent(self, e):
-        # 按住并移动即开始拖动（不需要长按）；固定时不允许拖动
-        if self._press is not None and (e.position() - self._press).manhattanLength() > 4:
-            self.lp_timer.stop()
+        # 按住并移动即开始拖动（不需要长按）；阈值用全局坐标 + 系统拖动距离，单击时的手抖 / 窗口吸附移动都不算拖动
+        if self._press is None or self._press_g is None:
+            return
+        d = e.globalPosition() - self._press_g
+        if math.hypot(d.x(), d.y()) > self._drag_slop():
             self._press = None
+            self._press_g = None
+            self._press_t0 = 0.0
             self.begin_drag(QtGui.QCursor.pos())
 
     def _on_play_button(self, local: QtCore.QPointF) -> bool:
@@ -1262,21 +1288,32 @@ class Island(QtWidgets.QWidget):
                 and r.adjusted(-6, -8, 6, 8).contains(local))
 
     def mouseReleaseEvent(self, e):
-        self.lp_timer.stop()
-        if self._press is not None and self._on_play_button(e.position()) and self._on_play_button(self._press):
-            self._press = None
+        if e.button() != Qt.MouseButton.LeftButton:
+            return
+        press, t0 = self._press, self._press_t0
+        self._press = None
+        self._press_g = None
+        self._press_t0 = 0.0
+        if press is None:
+            return
+        if self._on_play_button(e.position()) and self._on_play_button(press):
             self.play_pause_requested.emit()
             return
-        if self._press is not None and self.mode == "anchored" and not self.expanded \
-                and self.expand_mode() != "never":
+        if (time.monotonic() - t0) * 1000 >= LONG_PRESS_MS:
+            return                                     # 长按松手：不展开
+        # snap 期间的点击先排队，落位后由 _single_click 补展开
+        if self.mode in ("anchored", "snap") and not self.expanded and self.expand_mode() != "never":
             self._click_timer.start(QtWidgets.QApplication.doubleClickInterval())
-        self._press = None
 
     def _single_click(self):
-        if self.mode == "anchored" and not self.expanded and self.expand_mode() != "never":
+        if self.expanded or self.expand_mode() == "never":
+            return
+        if self.mode == "anchored":
             self.expand()
             self.locks.add("pin")
             QtCore.QTimer.singleShot(600, lambda: self.locks.discard("pin"))
+        elif self.mode == "snap":
+            self._pending_expand = True   # 吸附动画还没结束：等落位后再展开，别把这次点击丢掉
 
     def mouseDoubleClickEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton and self._on_play_button(e.position()):
@@ -1285,6 +1322,8 @@ class Island(QtWidgets.QWidget):
         if e.button() == Qt.MouseButton.LeftButton and self._inside(e.globalPosition().toPoint()):
             self._click_timer.stop()
             self._press = None
+            self._press_g = None
+            self._press_t0 = 0.0
             self.toggle_long_off()
 
     def toggle_long_off(self):
@@ -1296,9 +1335,6 @@ class Island(QtWidgets.QWidget):
             self.locks.discard("pin")
             self.release_focus()
             self.collapse()
-
-    def _long_press(self):
-        pass
 
     # ---------------- 穿透模式 ----------------
     def passthrough(self) -> bool:
@@ -1392,11 +1428,12 @@ class Island(QtWidgets.QWidget):
         self.pos_frac = pos
         self.neck_edge = edge
         self.mode = "anchored"
+        self._pending_expand = False   # 改吸附边 / 位置时，作废排队中的单击展开
         self._place_nav()
         self._kick()
 
     def hover_expand(self) -> bool:
-        """True = 鼠标悬停自动展开（默认）；False = 单击展开，按住拖拽不算点击。"""
+        """True = 鼠标悬停自动展开（默认）；False = 单击展开，长按（≥ LONG_PRESS_MS）或拖拽不算点击。"""
         return bool(cfg.get("island.hover_expand", True))
 
     def expand_mode(self) -> str:
