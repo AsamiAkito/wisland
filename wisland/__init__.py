@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-__version__ = "1.6.2"
+__version__ = "1.6.3"
 
 APP_NAME = "Wisland"
 APP_NAME_CN = "wisland 液态灵动岛"

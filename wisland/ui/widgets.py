@@ -538,6 +538,40 @@ class Sparkline(QtWidgets.QWidget, Themed):
         p.drawPath(path)
 
 
+class UsageBar(QtWidgets.QWidget, Themed):
+    """细比例条：轨道 + 按 value 填充，用于流量 / 容量占比。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._value = 0.0
+        self.setFixedHeight(4)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
+        self._hook_theme()
+
+    def set_value(self, v: float):
+        self._value = clamp(float(v or 0.0), 0.0, 1.0)
+        self.update()
+
+    def value(self) -> float:
+        return self._value
+
+    def paintEvent(self, _e):
+        p = painter(self)
+        r = QtCore.QRectF(self.rect())
+        radius = r.height() / 2
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(theme.track())
+        p.drawRoundedRect(r, radius, radius)
+        if self._value <= 0:
+            return
+        width = max(r.height(), r.width() * self._value)
+        if width <= 0:
+            return
+        bar = QtCore.QRectF(r.x(), r.y(), width, r.height())
+        p.setBrush(theme.on_color())
+        p.drawRoundedRect(bar, radius, radius)
+
+
 class Card(QtWidgets.QFrame, Themed):
     """轻卡片：极淡的白色圆角底（无描边、无分割线）。"""
     def __init__(self, parent=None, radius: float = 18, alpha: float = 1.0):
