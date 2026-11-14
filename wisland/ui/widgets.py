@@ -150,12 +150,25 @@ class PillButton(Hoverable):
         self.glyph = glyph
         self.primary = primary
         self.setFixedHeight(height)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed)
         self._fit()
 
+    def _content_width(self) -> int:
+        # 用浮点 metrics 量文字宽度：自定义字体的步进常带亚像素（如 43.1875），
+        # 整数 QFontMetrics 会截成 43，容器就差 1px 把最后一个字挤成省略号。
+        # 这里向上取整，再加 paintEvent 的 2px 内缩 + 左右留白（13+11）和图标占位（20）。
+        fm = QtGui.QFontMetricsF(ui_font(12.5, W.Medium))
+        return math.ceil(fm.horizontalAdvance(self.text)) + 26 + (20 if self.glyph else 0)
+
     def _fit(self):
-        fm = QtGui.QFontMetrics(ui_font(12.5, W.Medium))
-        w = fm.horizontalAdvance(self.text) + 26 + (20 if self.glyph else 0)
-        self.setMinimumWidth(min(w, self.maximumWidth()))
+        self.setMinimumWidth(min(self._content_width(), self.maximumWidth()))
+        self.updateGeometry()
+
+    def sizeHint(self):
+        return QtCore.QSize(min(self._content_width(), self.maximumWidth()), self.height())
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
 
     def set_text(self, t: str):
         self.text = t
