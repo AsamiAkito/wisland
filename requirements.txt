@@ -5,6 +5,8 @@ httpx
 pycaw
 comtypes
 pyyaml
+# DeepSeek desktop (DSH) session logs are zstd-compressed; 3.14+ has compression.zstd
+zstandard>=0.23; python_version < "3.14"
 winrt-runtime
 winrt-Windows.Media.Control
 winrt-Windows.Foundation

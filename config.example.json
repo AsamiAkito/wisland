@@ -4,13 +4,17 @@
     "pos": 0.5,
     "screen": 0,
     "theme": "auto",
+    "font_family": "",
     "hide_fullscreen": false,
+    "keep_on_top": true,
+    "hover_expand": true,
     "hover_expand_ms": 120,
     "collapse_delay_ms": 320,
     "exclude_from_capture": false,
     "blur_fps": 8,
     "scale": 1.0,
     "default_tab": "home",
+    "hidden_tabs": [],
     "expand_mode": "hover",
     "pinned": false,
     "compact_view": "clock",
@@ -26,6 +30,8 @@
     "auto_show": true,
     "lyrics": true,
     "netease_log": true,
+    "lyrics_sources": "netease,lrclib,custom",
+    "lyrics_custom_url": "",
     "priority": [
       "cloudmusic",
       "bilibili",
@@ -36,18 +42,85 @@
     ]
   },
   "notify": {
+    "modules": [
+      "qq",
+      "wechat",
+      "mail"
+    ],
+    "body_preview": [
+      "feishu",
+      "dingtalk"
+    ],
+    "popup": {
+      "enabled": true,
+      "position": "bottom_right",
+      "size": 100
+    },
     "toast_apps": {
       "QQ": {
         "name": "QQ",
         "kind": "qq"
       },
-      "ThunderbirdToast": {
-        "name": "邮件",
-        "kind": "mail"
-      },
       "Weixin": {
         "name": "微信",
         "kind": "wechat"
+      },
+      "ThunderbirdToast": {
+        "name": "邮件",
+        "kind": "mail",
+        "open": "thunderbird.exe"
+      },
+      "microsoft.windowscommunicationsapps_8wekyb3d8bbwe!microsoft.windowslive.mail": {
+        "name": "邮件",
+        "kind": "mail",
+        "open": "hxoutlook.exe"
+      },
+      "Microsoft.OutlookForWindows": {
+        "name": "邮件",
+        "kind": "mail",
+        "open": "olk.exe"
+      },
+      "Microsoft.Outlook": {
+        "name": "邮件",
+        "kind": "mail",
+        "open": "outlook.exe"
+      },
+      "Outlook": {
+        "name": "邮件",
+        "kind": "mail",
+        "open": "outlook.exe"
+      },
+      "com.electron.Feishu": {
+        "name": "飞书",
+        "kind": "feishu"
+      },
+      "electron.app.Feishu": {
+        "name": "飞书",
+        "kind": "feishu"
+      },
+      "Feishu": {
+        "name": "飞书",
+        "kind": "feishu"
+      },
+      "Lark": {
+        "name": "飞书",
+        "kind": "feishu"
+      },
+      "electron.app.Lark": {
+        "name": "飞书",
+        "kind": "feishu"
+      },
+      "DingTalk": {
+        "name": "钉钉",
+        "kind": "dingtalk"
+      },
+      "electron.app.DingTalk": {
+        "name": "钉钉",
+        "kind": "dingtalk"
+      },
+      "com.alibaba.dingtalk": {
+        "name": "钉钉",
+        "kind": "dingtalk"
       }
     },
     "flash_processes": {
@@ -66,12 +139,39 @@
       "thunderbird.exe": {
         "name": "邮件",
         "kind": "mail"
+      },
+      "hxoutlook.exe": {
+        "name": "邮件",
+        "kind": "mail"
+      },
+      "olk.exe": {
+        "name": "邮件",
+        "kind": "mail"
+      },
+      "outlook.exe": {
+        "name": "邮件",
+        "kind": "mail"
+      },
+      "feishu.exe": {
+        "name": "飞书",
+        "kind": "feishu"
+      },
+      "lark.exe": {
+        "name": "飞书",
+        "kind": "feishu"
+      },
+      "dingtalk.exe": {
+        "name": "钉钉",
+        "kind": "dingtalk"
       }
     },
     "open": {
       "qq": "",
       "wechat": "",
-      "mail": ""
+      "mail": "",
+      "feishu": "",
+      "dingtalk": "",
+      "dsh": ""
     }
   },
   "stocks": {
@@ -96,7 +196,9 @@
     "units": "metric",
     "lang": "zh_cn",
     "interval_min": 15,
-    "cities": []
+    "cities": [],
+    "ip_city": null,
+    "pinned_city": null
   },
   "brightness": {
     "twinkle": ""
@@ -167,7 +269,14 @@
   "launcher": [
     {
       "name": "文件资源管理器",
-      "path": "C:/Windows/explorer.exe"
+      "path": "%WINDIR%/explorer.exe"
     }
-  ]
+  ],
+  "dsh": {
+    "enabled": true,
+    "sessions_dir": "",
+    "include_subagents": false,
+    "skip_when_active": true,
+    "body_chars": 120
+  }
 }

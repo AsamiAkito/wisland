@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 
 from PySide6 import QtCore
 
 from ..core.config import cfg, expand
+from .download import DownloadCancelled, download_models, models_ready
 
 
 class _LiveConfig:
@@ -50,41 +52,39 @@ class LiveService(QtCore.QObject):
     final_zh = QtCore.Signal(str, str)           # (sid, 最终译文)
     level = QtCore.Signal(float)
     running_changed = QtCore.Signal(bool)
-    downloading_changed = QtCore.Signal(bool)    # 正在下载识别模型
+    download_started = QtCore.Signal()
+    downloading_changed = QtCore.Signal(bool)
+    download_progress = QtCore.Signal(int, int, str)   # 已下载字节、总字节（0=未知）、阶段
+    download_note = QtCore.Signal(str)
+    download_done = QtCore.Signal(bool, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.pipe = None
         self.running = False
-        self._dl = None
+        self.downloading = False
+        self._dl_cancel: threading.Event | None = None
         # numpy / sherpa-onnx 导入要 0.5s 以上：启动后在后台预先导入，点「开始聆听」时不卡界面
         from ..core.bg import run_bg
         run_bg(lambda: __import__("wisland.live.pipeline"))
 
     def available(self) -> tuple[bool, str]:
-        from .paths import MODELS
-        if not (MODELS / "parakeet-ja-0.6b-int8").exists() or not (MODELS / "silero_vad.onnx").exists():
-            return False, "缺少识别模型（约 630MB）"
+        if not models_ready():
+            return False, "首次使用需要下载识别模型（约 630 MB）"
         return True, ""
-
-    @property
-    def downloading(self) -> bool:
-        return bool(self._dl and self._dl.running)
 
     def toggle(self):
         if self.downloading:
-            self._dl.cancel()
-        elif self.running:
-            self.stop()
-        else:
-            self.start_listen()
+            self.cancel_download()
+            return
+        self.stop() if self.running else self.start_listen()
 
     def start_listen(self):
         if self.running or self.downloading:
             return
-        ok, msg = self.available()
+        ok, _msg = self.available()
         if not ok:
-            self._download()
+            self._start_download()
             return
         from .pipeline import Pipeline       # 重依赖（numpy / sherpa-onnx）用到时才导入
         p = Pipeline(_LiveConfig())
@@ -101,24 +101,51 @@ class LiveService(QtCore.QObject):
         p.start()
         self.running_changed.emit(True)
 
-    def _download(self):
-        """第一次使用：在后台下载模型，下完自动开始聆听。"""
-        from .download import ModelDownloader
-        if self._dl is None:
-            self._dl = ModelDownloader(self)
-            self._dl.progress.connect(lambda f, text: self.status.emit(text))
-            self._dl.finished.connect(self._downloaded)
-        self.status.emit("正在连接下载服务器…")
-        self._dl.start()
+    def _start_download(self):
+        if self.downloading or self.running:
+            return
+        self.downloading = True
+        self._dl_cancel = threading.Event()
+        self.download_started.emit()
         self.downloading_changed.emit(True)
+        from ..core.bg import run_bg
+        run_bg(lambda: download_models(self._dl_cancel, self._download_progress, self.download_note.emit),
+               on_done=lambda _res: self._download_finished(True, ""),
+               on_error=self._download_error)
 
-    def _downloaded(self, ok: bool, msg: str):
-        self.downloading_changed.emit(False)
-        if ok:
-            self.status.emit("模型下载完成")
-            self.start_listen()
+    def _download_progress(self, done: int, total: int, label: str):
+        if self.downloading:
+            self.download_progress.emit(int(done), int(total), label)
+
+    def _download_error(self, e: Exception):
+        if isinstance(e, DownloadCancelled):
+            self._download_finished(False, "已取消下载；再点「开始聆听」会从断点继续。")
         else:
-            self.error.emit(msg)
+            self._download_finished(False, f"模型下载失败：{e}")
+
+    def _download_finished(self, ok: bool, msg: str):
+        if not self.downloading:
+            return
+        self.downloading = False
+        self._dl_cancel = None
+        self.downloading_changed.emit(False)
+        self.download_done.emit(ok, msg)
+        if ok:
+            ready, err = self.available()
+            if not ready:
+                self.error.emit(err or "模型文件校验失败")
+                return
+            try:
+                self.start_listen()
+            except Exception as e:  # noqa: BLE001
+                self.error.emit(f"模型已下载，但启动字幕失败：{e}")
+
+    def cancel_download(self):
+        if not self.downloading:
+            return
+        if self._dl_cancel is not None:
+            self._dl_cancel.set()
+        self.download_note.emit("正在取消下载…")
 
     def clip(self, sid: str):
         for pipe in (self.pipe, getattr(self, "_last_pipe", None)):
@@ -133,6 +160,8 @@ class LiveService(QtCore.QObject):
 
     def stop(self, wait: bool = False):
         """停止聆听。等待音频线程结束放到后台，不阻塞界面（退出程序时 wait=True）。"""
+        if self.downloading:
+            self.cancel_download()
         p, self.pipe = self.pipe, None
         if p is not None:
             self._last_pipe = p

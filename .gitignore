@@ -17,3 +17,13 @@ models/
 
 # 宣传视频素材与输出
 promo/
+
+# 打包产物与依赖缓存
+build/
+dist/
+builddeps/
+.venv-build/
+packaging/
+
+# 本地 PR 描述与提交材料
+.shiroki/

@@ -3,7 +3,7 @@
 
 几何有三种模式：
 - anchored：吸附在某条屏幕边上，贴边一侧与屏幕边缘通过两侧"表面张力"内凹圆角相连；
-- drag：长按后跟随鼠标（弹簧跟随产生拖拽惯性），本体按速度变成泪滴形；
+- drag：按住并移动后跟随鼠标（弹簧跟随产生拖拽惯性），本体按速度变成泪滴形；
          离开原边缘时液桥被拉长、变细，超过阈值后断开，边缘残留的小水滴缩回；
          靠近任意边缘时会重新"伸出"液桥；
 - snap：松手后吸附到最近的边，垂直方向欠阻尼弹簧带回弹，冲过边缘时转化为挤压形变。
@@ -39,10 +39,23 @@ FILLET = 13.0                    # 贴边两侧内凹圆角
 BREAK = 64.0                     # 液桥拉断距离
 JOIN = 30.0                      # 靠近到这个距离时液桥伸出
 EDGE_MARGIN = 6
+LONG_PRESS_MS = 420              # 按住超过这么久算长按：不展开（长按多半是想拖动或误按）
+DRAG_SLOP_MIN = 8                # 至少 8 逻辑像素：单击时的手抖不再被当成拖动
+
+# 新消息呼吸灯的光带剖面 (t, α)：t = 离吸附边的距离 / 光带厚度。
+# 最前面 7% 是贴着边的那根亮线，之后迅速衰减成余光，末端收到 0 —— 渐变到 0 才不会留下一条硬边。
+BREATH_STOPS = ((0.00, 1.00), (0.07, 0.92), (0.17, 0.55), (0.30, 0.26), (0.52, 0.09), (1.00, 0.00))
+BREATH_BAND = (0.55, 10.0, 34.0)  # 余光厚度：本体厚度 × 比例，再夹到 [最小, 最大] px
 
 GWL_EXSTYLE = -20
 WS_EX_NOACTIVATE = 0x08000000
 WS_EX_TRANSPARENT = 0x00000020
+WS_EX_TOPMOST = 0x00000008
+HWND_TOPMOST = -1
+HWND_NOTOPMOST = -2
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_NOACTIVATE = 0x0010
 WM_HOTKEY = 0x0312
 HSHELL_FLASH = 0x8006
 MOD = {"alt": 0x1, "ctrl": 0x2, "control": 0x2, "shift": 0x4, "win": 0x8}
@@ -52,6 +65,9 @@ user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
 user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
 user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
 user32.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+user32.SetWindowPos.restype = wintypes.BOOL
+user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND,
+                                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
 user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
 user32.GetWindowThreadProcessId.restype = wintypes.DWORD
 user32.GetForegroundWindow.restype = wintypes.HWND
@@ -213,9 +229,11 @@ class Island(QtWidgets.QWidget):
 
     play_pause_requested = QtCore.Signal()      # 收起态音乐视图的播放 / 暂停键
 
-    def __init__(self, pages: list, peak_fn=None):
+    def __init__(self, pages: list, peak_fn=None, visible_fn=None):
+        # 置顶由 apply_keep_on_top() / _raise_topmost() 通过 SetWindowPos 控制，
+        # 不再使用 WindowStaysOnTopHint：这样「开启保持置顶」关闭后，Qt 不会在显示 / 激活时把 TopMost 加回来。
         super().__init__(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
-                         | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.NoDropShadowWindowHint)
+                         | Qt.WindowType.NoDropShadowWindowHint)
         self.setWindowTitle("wisland")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
@@ -225,7 +243,10 @@ class Island(QtWidgets.QWidget):
 
         self.backdrop = Backdrop()
         self.compact = CompactView()
-        self.pages = pages
+        self.all_pages = list(pages)
+        self._visible_fn = visible_fn or (lambda key: True)
+        self.pages = [pg for pg in self.all_pages if self._visible_fn(pg.key)]
+        pages = self.pages                        # 下面构建导航 / 页面栈只用可见的板块
 
         # ---- 几何状态 ----
         self.edge: str = cfg.get("island.edge", "top")
@@ -235,7 +256,7 @@ class Island(QtWidgets.QWidget):
         self.scr: QtGui.QScreen = self._pick_screen()
         self.mode = "anchored"
         self.expanded = False
-        cw, ch = self.compact.size_hint()
+        cw, ch = self.compact.size_hint(vertical=self.edge in ("left", "right"))
         self.sw = Spring(cw, 300, 0.62, 0.2)
         self.sh = Spring(ch, 300, 0.62, 0.2)
         self.fx = Spring(0, 900, 0.78, 0.2)
@@ -252,12 +273,18 @@ class Island(QtWidgets.QWidget):
         self._t0 = time.perf_counter()
         self._last = self._t0
         self._last_cap = 0.0
+        self._breath_color = QtGui.QColor(255, 255, 255)
+        self._breath_t0 = 0.0
+        self._breath_t1 = 0.0
         self._win_origin = QtCore.QPoint(0, 0)
         self.path = QtGui.QPainterPath()
         self.body = QtCore.QRectF()
         self._hover_since = None
         self._out_since = None
         self._press: QtCore.QPointF | None = None
+        self._press_g: QtCore.QPointF | None = None
+        self._press_t0 = 0.0
+        self._pending_expand = False
         self._fs_hidden = False
         self._prev_fg = None
         self._registered_hotkeys: dict[int, str] = {}
@@ -302,7 +329,7 @@ class Island(QtWidgets.QWidget):
         self.timer.setInterval(16)
         self.timer.timeout.connect(self._tick)
         self.poll = QtCore.QTimer(self, interval=25, timeout=self._poll_hover)
-        self.lp_timer = QtCore.QTimer(self, singleShot=True, interval=420, timeout=self._long_press)
+        self.topmost_timer = QtCore.QTimer(self, interval=500, timeout=self._ensure_topmost)
         self._click_timer = QtCore.QTimer(self, singleShot=True, timeout=self._single_click)
         self._dbl_filter = _BlankDoubleClick(self)
         QtWidgets.QApplication.instance().installEventFilter(self._dbl_filter)
@@ -365,11 +392,13 @@ class Island(QtWidgets.QWidget):
             pg = self.pages[self.stack.currentIndex()]
             h = PAD - 2 + NAV_H + 8 + pg.preferred_height() + PAD
             return EXP_W, h
-        return self.compact.size_hint()
+        return self.compact.size_hint(vertical=self.edge in ("left", "right"))
 
     def expand(self, page: str | None = None):
         if self.mode != "anchored" or self._fs_hidden:
             return
+        # 悬停展开前先压到置顶层最前面：避免被其他置顶窗口盖住，只有点击后才浮上来
+        self._raise_topmost()
         if not self.expanded:
             # 打开时停留在上次收起前的页面（热键 / 托盘等指定了页面的除外）
             self.show_page(page or self._page_key)
@@ -441,6 +470,46 @@ class Island(QtWidgets.QWidget):
         """页面的数据刷新稍后执行，让形变动画先跑起来。"""
         QtCore.QTimer.singleShot(40, lambda: pg.on_show() if self.expanded and self.pages[self.stack.currentIndex()] is pg else None)
 
+    def apply_page_visibility(self):
+        """按 visible_fn 重建标签组：运行时开启 / 隐藏某个板块（如「股票」）。"""
+        vis = [pg for pg in self.all_pages if self._visible_fn(pg.key)]
+        if [pg.key for pg in vis] == [pg.key for pg in self.pages]:
+            return
+        cur = self._page_key
+        before = self.stack.currentWidget()
+        removed = False
+        for pg in list(self.pages):
+            if pg in vis:
+                continue
+            removed = True
+            if before is pg:
+                pg.on_hide()
+            self.stack.removeWidget(pg)
+            pg.island = None
+        if removed:
+            self.release_focus()
+        for i, pg in enumerate(vis):
+            if self.stack.indexOf(pg) < 0:
+                self.stack.insertWidget(i, pg)
+            pg.island = self
+        self.pages = vis
+        self.nav.set_items([(pg.key, pg.glyph, pg.title) for pg in vis])
+        if cur not in self.nav.keys():
+            cur = vis[0].key
+            cfg.set("island.last_tab", cur, save=False)
+        self._page_key = cur
+        self.nav.set_current(cur)
+        self.stack.setCurrentWidget(next(pg for pg in vis if pg.key == cur))
+        self._floor_t.clear()
+        self._floor_on.clear()
+        if self.expanded:
+            w, h = self.target_size()
+            self.sw.to(w, 440, 0.6)
+            self.sh.to(h, 440, 0.6)
+            if self.stack.currentWidget() is not before:
+                self._defer_show(self.stack.currentWidget())
+        self._kick()
+
     def page_size_changed(self):
         """页面内容高度变化时由页面调用。"""
         if self.expanded:
@@ -452,6 +521,20 @@ class Island(QtWidgets.QWidget):
         self.compact.show_activity(act, duration)
         self._kick()
 
+    def breath(self, color, duration: float = 5.0):
+        """新消息呼吸灯：沿吸附边亮起，持续 duration 秒后自动消失。
+
+        灯还亮着时又来一条：保持当前的呼吸相位，只换成最新的颜色、把结束时间往后推。
+        不然每次都要重新淡入，连收几条消息时灯会先暗半拍再亮起，看着一闪一闪。
+        """
+        now = time.perf_counter()
+        self._breath_color = QtGui.QColor(color)
+        if now >= self._breath_t1:
+            self._breath_t0 = now
+        self._breath_t1 = now + max(0.2, float(duration))
+        self._kick()
+        self.update()
+
     def _set_content_opacity(self, a: float):
         """不再使用 QGraphicsOpacityEffect：在透明分层窗口里，带效果的子控件会单独重绘，
         偶尔出现"有内容、没有玻璃底"的帧。内容改为：形状长到约 70% 后直接显示（被形状裁剪），收起时立即隐藏。"""
@@ -461,6 +544,8 @@ class Island(QtWidgets.QWidget):
     def begin_drag(self, gpos: QtCore.QPoint | None = None):
         if self.mode == "drag" or self.passthrough():
             return
+        self._pending_expand = False
+        self._click_timer.stop()          # 单击后马上拖动：作废排队中的单击展开，别在拖动结束后又弹开
         gpos = QtCore.QPointF(gpos or QtGui.QCursor.pos())
         c = self.body.center() + QtCore.QPointF(self._win_origin)
         if self.expanded:
@@ -475,7 +560,7 @@ class Island(QtWidgets.QWidget):
             # 收成胶囊，中心向鼠标靠拢
             c = QtCore.QPointF(gpos)
         self.compact_a.to(1, 500, 1.0)
-        cw, ch = self.compact.size_hint()
+        cw, ch = self.compact.size_hint(vertical=self.edge in ("left", "right"))
         self.sw.to(cw, 300, 0.55)
         self.sh.to(ch, 300, 0.55)
         self.mode = "drag"
@@ -542,6 +627,8 @@ class Island(QtWidgets.QWidget):
             self.timer.start()
 
     def _needs_frames(self) -> bool:
+        if time.perf_counter() < self._breath_t1:
+            return True
         if self.mode != "anchored" or self.drips or self._bd_prev is not None:
             return True
         for s in (self.sw, self.sh, self.content_a, self.compact_a, self.neck_s):
@@ -564,7 +651,7 @@ class Island(QtWidgets.QWidget):
                 self.fx.to(cp.x())
                 self.fy.to(cp.y())
         if not self.expanded:
-            cw, ch = self.compact.size_hint()
+            cw, ch = self.compact.size_hint(vertical=self.edge in ("left", "right"))
             if abs(self.sw.target - cw) > 0.5 or abs(self.sh.target - ch) > 0.5:
                 if self.content_a.x < 0.12:
                     self.sw.to(cw, 460, 0.64)
@@ -615,8 +702,12 @@ class Island(QtWidgets.QWidget):
         if self.mode == "snap" and self.along.rest and self.gap.rest:
             self.mode = "anchored"
             self._place_nav()
+            pending = self._pending_expand
+            self._pending_expand = False
             if self.pinned():
                 QtCore.QTimer.singleShot(80, self.expand)
+            elif pending:
+                self._single_click()
             R = self._avail()
             horiz = self.edge in ("top", "bottom")
             self.pos_frac = clamp(((self.along.x - R.left()) / R.width()) if horiz
@@ -962,6 +1053,7 @@ class Island(QtWidgets.QWidget):
         rg.setColorAt(0, theme.rim_top())
         rg.setColorAt(1, theme.rim_bottom())
         p.strokePath(path, QtGui.QPen(QtGui.QBrush(rg), 1.0))
+        self._paint_breath(p, path, bb)
         self._paint_rest(p, path, bb)
 
     def _paint_glass(self, p: QtGui.QPainter, path: QtGui.QPainterPath, crossfade: bool = True):
@@ -997,6 +1089,64 @@ class Island(QtWidgets.QWidget):
         g.setColorAt(1, QtGui.QColor(255, 255, 255, 10))
         p.fillPath(path, g)
 
+    def _paint_breath(self, p: QtGui.QPainter, path: QtGui.QPainterPath, bb: QtCore.QRectF):
+        """新消息呼吸灯：贴着屏幕的吸附边一呼一吸，5 秒后自动淡出。
+
+        光要盖住"整个接触面"：吸附时贴边两侧还有表面张力外扩的液脚，只按胶囊本体铺，
+        两侧就会留下没被点亮的直角，看着像颜色没盖满。所以横向铺满形状的外接矩形、
+        纵向从吸附边往里迅速衰减 —— 贴边的亮线 + 余光都做在同一条渐变里，轮廓上没有硬边。
+        """
+        now = time.perf_counter()
+        if now >= self._breath_t1:
+            return
+        elapsed = max(0.0, now - self._breath_t0)
+        remain = max(0.0, self._breath_t1 - now)
+        env = smooth(elapsed / 0.45) * smooth(remain / 1.1)     # 起 / 收都慢一点，不会"啪"地亮灭
+        if env <= 0.01:
+            return
+        wave = 0.5 - 0.5 * math.cos(elapsed * math.tau * 0.5)   # 0.5Hz：一次呼吸约 2s，像呼吸不像心跳
+        k = env * (0.26 + 0.74 * wave)
+        if k <= 0.01:
+            return
+        col = QtGui.QColor(self._breath_color)
+        edge = self.edge
+        horiz = edge in ("top", "bottom")
+        shp = path.boundingRect()
+        depth = bb.height() if horiz else bb.width()
+        ratio, lo, hi = BREATH_BAND
+        band = clamp(depth * ratio, lo, hi)
+        # 纵向（离开吸附边）从本体边缘起算：贴边的一侧液桥会多冒出去 1.5px，那一条在屏幕外
+        # （或压在任务栏下），从形状边缘起算的话最亮的那一线正好被裁掉，剩下的余光就显得发灰。
+        # 横向则铺满形状的外接矩形，液脚也一起点亮，不然贴边两侧会留下没盖到的直角。
+        if edge == "top":
+            line = bb.top()
+            y0 = min(shp.top(), line)
+            rect = QtCore.QRectF(shp.left(), y0, shp.width(), band + (line - y0))
+            grad = QtGui.QLinearGradient(0, line, 0, line + band)
+        elif edge == "bottom":
+            line = bb.bottom()
+            y1 = max(shp.bottom(), line)
+            rect = QtCore.QRectF(shp.left(), line - band, shp.width(), band + (y1 - line))
+            grad = QtGui.QLinearGradient(0, line, 0, line - band)
+        elif edge == "left":
+            line = bb.left()
+            x0 = min(shp.left(), line)
+            rect = QtCore.QRectF(x0, shp.top(), band + (line - x0), shp.height())
+            grad = QtGui.QLinearGradient(line, 0, line + band, 0)
+        else:
+            line = bb.right()
+            x1 = max(shp.right(), line)
+            rect = QtCore.QRectF(line - band, shp.top(), band + (x1 - line), shp.height())
+            grad = QtGui.QLinearGradient(line, 0, line - band, 0)
+        for t, af in BREATH_STOPS:
+            c = QtGui.QColor(col)
+            c.setAlphaF(min(1.0, k * af))
+            grad.setColorAt(t, c)
+        p.save()
+        p.setClipPath(path)
+        p.fillRect(rect, grad)
+        p.restore()
+
     def _paint_rest(self, p: QtGui.QPainter, path: QtGui.QPainterPath, bb: QtCore.QRectF):
         # 5) 常态动画：沿边缘缓慢游走的流光
         t = time.perf_counter() - self._t0
@@ -1023,7 +1173,8 @@ class Island(QtWidgets.QWidget):
             self.compact.squash = ((1 + 0.05 * pk, 1 - 0.16 * pk) if horiz else (1 - 0.16 * pk, 1 + 0.05 * pk))
             p.save()
             p.setClipPath(path)               # 内容（含表情）不超出灵动岛
-            self.compact.paint(p, bb, self.compact_a.x, self.peak_fn() if self.compact.mode() == "media" else 0.0)
+            self.compact.paint(p, bb, self.compact_a.x, self.peak_fn() if self.compact.mode() == "media" else 0.0,
+                               vertical=self.edge in ("left", "right"))
             p.restore()
         p.end()
 
@@ -1034,16 +1185,26 @@ class Island(QtWidgets.QWidget):
             return True
         return self.body.adjusted(-4, -4, 4, 4).contains(lp)
 
+    def _drag_slop(self) -> float:
+        """拖动阈值：用系统的拖动距离，避免单击时的轻微抖动被误判成拖动。"""
+        return max(DRAG_SLOP_MIN, int(QtWidgets.QApplication.startDragDistance()))
+
     def _poll_hover(self):
         # 输入框的键盘焦点：切到别的窗口后立即释放，否则会一直保持展开
         if "focus" in self.locks and user32.GetForegroundWindow() != int(self.winId()):
             self._prev_fg = None
             self.release_focus()
+        now = time.monotonic()
+        if self._press is not None and now - self._press_t0 > 1.5 \
+                and not (user32.GetAsyncKeyState(0x01) & 0x8000):
+            # 松手事件丢失的兜底：键早就抬起却还留着按下状态，清掉，避免之后一动就拖动
+            self._press = None
+            self._press_g = None
+            self._press_t0 = 0.0
         if self._fs_hidden or self.mode != "anchored":
             self._hover_since = self._out_since = None
             return
         inside = self._inside(QtGui.QCursor.pos())
-        now = time.monotonic()
         if not self.expanded and self.mode == "anchored" and not self._fs_hidden:
             # 收起时（任何展开方式）：鼠标靠近就把水滴"挤"一下，离开后带回弹地恢复
             # 只有鼠标进入灵动岛范围才挤压；越靠近中心挤压越强（边缘处几乎不变形）。
@@ -1079,7 +1240,9 @@ class Island(QtWidgets.QWidget):
         if inside:
             self._out_since = None
             if not self.expanded and self.expand_mode() != "never":
-                if self._hover_since is None:
+                if not self.hover_expand():
+                    self._hover_since = None   # 关闭悬停展开：不累计计时，重新打开时不会立刻展开
+                elif self._hover_since is None:
                     self._hover_since = now
                 elif (now - self._hover_since) * 1000 >= cfg.get("island.hover_expand_ms", 220) \
                         and not (user32.GetAsyncKeyState(0x01) & 0x8000):
@@ -1103,14 +1266,20 @@ class Island(QtWidgets.QWidget):
             return
         if e.button() == Qt.MouseButton.LeftButton:
             self._press = e.position()
+            self._press_g = e.globalPosition()
+            self._press_t0 = time.monotonic()
         elif e.button() == Qt.MouseButton.RightButton:
             self.menu_requested.emit(e.globalPosition().toPoint())
 
     def mouseMoveEvent(self, e):
-        # 按住并移动即开始拖动（不需要长按）；固定时不允许拖动
-        if self._press is not None and (e.position() - self._press).manhattanLength() > 4:
-            self.lp_timer.stop()
+        # 按住并移动即开始拖动（不需要长按）；阈值用全局坐标 + 系统拖动距离，单击时的手抖 / 窗口吸附移动都不算拖动
+        if self._press is None or self._press_g is None:
+            return
+        d = e.globalPosition() - self._press_g
+        if math.hypot(d.x(), d.y()) > self._drag_slop():
             self._press = None
+            self._press_g = None
+            self._press_t0 = 0.0
             self.begin_drag(QtGui.QCursor.pos())
 
     def _on_play_button(self, local: QtCore.QPointF) -> bool:
@@ -1119,21 +1288,32 @@ class Island(QtWidgets.QWidget):
                 and r.adjusted(-6, -8, 6, 8).contains(local))
 
     def mouseReleaseEvent(self, e):
-        self.lp_timer.stop()
-        if self._press is not None and self._on_play_button(e.position()) and self._on_play_button(self._press):
-            self._press = None
+        if e.button() != Qt.MouseButton.LeftButton:
+            return
+        press, t0 = self._press, self._press_t0
+        self._press = None
+        self._press_g = None
+        self._press_t0 = 0.0
+        if press is None:
+            return
+        if self._on_play_button(e.position()) and self._on_play_button(press):
             self.play_pause_requested.emit()
             return
-        if self._press is not None and self.mode == "anchored" and not self.expanded \
-                and self.expand_mode() != "never":
+        if (time.monotonic() - t0) * 1000 >= LONG_PRESS_MS:
+            return                                     # 长按松手：不展开
+        # snap 期间的点击先排队，落位后由 _single_click 补展开
+        if self.mode in ("anchored", "snap") and not self.expanded and self.expand_mode() != "never":
             self._click_timer.start(QtWidgets.QApplication.doubleClickInterval())
-        self._press = None
 
     def _single_click(self):
-        if self.mode == "anchored" and not self.expanded and self.expand_mode() != "never":
+        if self.expanded or self.expand_mode() == "never":
+            return
+        if self.mode == "anchored":
             self.expand()
             self.locks.add("pin")
             QtCore.QTimer.singleShot(600, lambda: self.locks.discard("pin"))
+        elif self.mode == "snap":
+            self._pending_expand = True   # 吸附动画还没结束：等落位后再展开，别把这次点击丢掉
 
     def mouseDoubleClickEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton and self._on_play_button(e.position()):
@@ -1142,6 +1322,8 @@ class Island(QtWidgets.QWidget):
         if e.button() == Qt.MouseButton.LeftButton and self._inside(e.globalPosition().toPoint()):
             self._click_timer.stop()
             self._press = None
+            self._press_g = None
+            self._press_t0 = 0.0
             self.toggle_long_off()
 
     def toggle_long_off(self):
@@ -1153,9 +1335,6 @@ class Island(QtWidgets.QWidget):
             self.locks.discard("pin")
             self.release_focus()
             self.collapse()
-
-    def _long_press(self):
-        pass
 
     # ---------------- 穿透模式 ----------------
     def passthrough(self) -> bool:
@@ -1181,6 +1360,39 @@ class Island(QtWidgets.QWidget):
         else:
             self._rhook.remove()
 
+    # ---------------- 保持置顶 ----------------
+    def keep_on_top(self) -> bool:
+        return bool(cfg.get("island.keep_on_top", True))
+
+    def set_keep_on_top(self, on: bool):
+        cfg.set("island.keep_on_top", bool(on))
+        self.apply_keep_on_top()
+
+    def _set_topmost(self, on: bool):
+        """原生设置 / 取消 TopMost：会同时把它放到置顶层最前面，但不会抢焦点。"""
+        hwnd = int(self.winId())
+        user32.SetWindowPos(hwnd, HWND_TOPMOST if on else HWND_NOTOPMOST,
+                            0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+
+    def apply_keep_on_top(self):
+        """让窗口的 TopMost 状态与设置保持一致（设置窗口保存后调用）。"""
+        if self.isVisible():
+            self._set_topmost(self.keep_on_top())
+
+    def _raise_topmost(self):
+        """展开 / 重新显示时重新压到置顶层最前面，避免悬停展开被其他窗口盖住。"""
+        if self.keep_on_top():
+            self._set_topmost(True)
+
+    def _ensure_topmost(self):
+        """系统或别的程序偶尔会改掉置顶状态：定时校正，避免只有点击后才回到前面。"""
+        if not self.isVisible():
+            return
+        hwnd = int(self.winId())
+        actual = bool(user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST)
+        if actual != self.keep_on_top():
+            self._set_topmost(self.keep_on_top())
+
     def capture_visible(self) -> bool:
         return not bool(cfg.get("island.exclude_from_capture", False))
 
@@ -1196,6 +1408,33 @@ class Island(QtWidgets.QWidget):
         exclude_from_capture(hwnd, not visible)
         self.backdrop.hwnd = hwnd
         self.backdrop.self_exclude = visible
+
+    def apply_layout_settings(self):
+        """设置窗口改了吸附边 / 位置 / 显示器后重新吸附，不需要重启。"""
+        edge = cfg.get("island.edge", "top")
+        if edge not in ("top", "bottom", "left", "right"):
+            edge = "top"
+        screens = QtGui.QGuiApplication.screens()
+        i = int(cfg.get("island.screen", 0) or 0)
+        scr = screens[i] if 0 <= i < len(screens) else QtGui.QGuiApplication.primaryScreen()
+        try:
+            pos = clamp(float(cfg.get("island.pos", 0.5)), 0.0, 1.0)
+        except (TypeError, ValueError):
+            pos = 0.5
+        if edge == self.edge and scr is self.scr and abs(pos - self.pos_frac) < 1e-4:
+            return
+        self.edge = edge
+        self.scr = scr
+        self.pos_frac = pos
+        self.neck_edge = edge
+        self.mode = "anchored"
+        self._pending_expand = False   # 改吸附边 / 位置时，作废排队中的单击展开
+        self._place_nav()
+        self._kick()
+
+    def hover_expand(self) -> bool:
+        """True = 鼠标悬停自动展开（默认）；False = 单击展开，长按（≥ LONG_PRESS_MS）或拖拽不算点击。"""
+        return bool(cfg.get("island.hover_expand", True))
 
     def expand_mode(self) -> str:
         m = cfg.get("island.expand_mode")
@@ -1282,6 +1521,9 @@ class Island(QtWidgets.QWidget):
         if not self._registered_hotkeys:
             self.register_hotkeys()
         self._apply_passthrough()
+        # 重新显示（例如全屏隐藏后）时恢复置顶；关闭置顶设置时不使用 WindowStaysOnTopHint，避免 Qt 自动加回来
+        self._set_topmost(self.keep_on_top())
+        self.topmost_timer.start()
         if self.pinned():
             QtCore.QTimer.singleShot(600, self.expand)
         self.poll.start()
@@ -1338,6 +1580,7 @@ class Island(QtWidgets.QWidget):
         except Exception:  # noqa: BLE001
             pass
         self.backdrop.stop()
+        self.topmost_timer.stop()
         self._rhook.remove()
         cfg.save()
         super().closeEvent(e)

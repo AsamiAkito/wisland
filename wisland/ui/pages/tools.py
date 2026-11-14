@@ -688,7 +688,10 @@ class TranslatePage(Page):
         lv.status.connect(self.live_status.setText)
         lv.error.connect(lambda m: self.live_status.setText(m))
         lv.running_changed.connect(self._live_state)
-        lv.downloading_changed.connect(self._dl_state)
+        lv.downloading_changed.connect(self._download_state)
+        lv.download_progress.connect(self._download_progress)
+        lv.download_note.connect(self.live_status.setText)
+        lv.download_done.connect(self._download_done)
         theme.changed.connect(self._style)
         self._style()
         ctx.translate.delta.connect(self._delta)
@@ -738,11 +741,6 @@ class TranslatePage(Page):
         self.mode.set_index(1)
         self.modes.setCurrentIndex(1)
 
-    def _dl_state(self, on: bool):
-        self.live_btn.set_text("取消下载" if on else "开始聆听")
-        self.live_btn.primary = not on
-        self.live_btn.update()
-
     def _live_state(self, on: bool):
         self.live_btn.set_text("停止聆听" if on else "开始聆听")
         self.live_btn.primary = not on
@@ -752,6 +750,38 @@ class TranslatePage(Page):
         else:
             self.level.set_level(0)
             self.live_status.setText("")
+
+    def _download_state(self, on: bool):
+        if on:
+            self.live_btn.set_text("取消下载")
+            self.live_btn.primary = False
+            self.live_btn.update()
+            self.live_status.setText("准备下载识别模型…")
+            self.level.set_level(0)
+        elif not self.ctx.live.running:
+            self.live_btn.set_text("开始聆听")
+            self.live_btn.primary = True
+            self.live_btn.update()
+
+    def _download_progress(self, done: int, total: int, label: str):
+        frac = done / total if total else 0.0
+        self.level.set_level(max(0.0, min(1.0, frac)))
+        mb = done / (1024 * 1024)
+        if total:
+            self.live_status.setText(
+                f"{label} {min(100, int(done * 100 / total))}% · {mb:.0f}/{total / (1024 * 1024):.0f} MB")
+        else:
+            self.live_status.setText(f"{label} · {mb:.0f} MB")
+
+    def _download_done(self, ok: bool, msg: str):
+        if ok:
+            self.live_status.setText("模型已就绪，正在启动聆听…")
+            return
+        self.live_btn.set_text("开始聆听")
+        self.live_btn.primary = True
+        self.live_btn.update()
+        self.level.set_level(0)
+        self.live_status.setText(msg)
 
     def _style(self):
         self.out.setStyleSheet(f"color:{theme.qss_color(theme.text())};background:transparent")

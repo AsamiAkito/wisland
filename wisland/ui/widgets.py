@@ -150,15 +150,32 @@ class PillButton(Hoverable):
         self.glyph = glyph
         self.primary = primary
         self.setFixedHeight(height)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed)
         self._fit()
 
+    def _content_width(self) -> int:
+        # 用浮点 metrics 量文字宽度：自定义字体的步进常带亚像素（如 43.1875），
+        # 整数 QFontMetrics 会截成 43，容器就差 1px 把最后一个字挤成省略号。
+        # 这里向上取整，再加 paintEvent 的 2px 内缩 + 左右留白（13+11）和图标占位（20）。
+        fm = QtGui.QFontMetricsF(ui_font(12.5, W.Medium))
+        return math.ceil(fm.horizontalAdvance(self.text)) + 26 + (20 if self.glyph else 0)
+
     def _fit(self):
-        fm = QtGui.QFontMetrics(ui_font(12.5, W.Medium))
-        w = fm.horizontalAdvance(self.text) + 26 + (20 if self.glyph else 0)
-        self.setMinimumWidth(min(w, self.maximumWidth()))
+        self.setMinimumWidth(min(self._content_width(), self.maximumWidth()))
+        self.updateGeometry()
+
+    def sizeHint(self):
+        return QtCore.QSize(min(self._content_width(), self.maximumWidth()), self.height())
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
 
     def set_text(self, t: str):
         self.text = t
+        self._fit()
+        self.update()
+
+    def refresh_fonts(self):
         self._fit()
         self.update()
 
@@ -195,7 +212,7 @@ class Label(QtWidgets.QWidget, Themed):
                  color: QtGui.QColor | None = None, wrap: bool = False):
         super().__init__(parent)
         self._text = text
-        self.font_ = ui_font(px, weight, num)
+        self._px, self._weight, self._num = px, weight, num
         self.level = level
         self.align = align
         self.color = color
@@ -206,6 +223,11 @@ class Label(QtWidgets.QWidget, Themed):
         self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred if not wrap else QtWidgets.QSizePolicy.Policy.Expanding,
                            QtWidgets.QSizePolicy.Policy.Fixed if not wrap else QtWidgets.QSizePolicy.Policy.Expanding)
         self._hook_theme()
+
+    @property
+    def font_(self) -> QtGui.QFont:
+        """每次取都按当前字体设置生成，设置里换字体后不用重建控件。"""
+        return ui_font(self._px, self._weight, self._num)
 
     def sizeHint(self):
         fm = QtGui.QFontMetrics(self.font_)
@@ -220,6 +242,13 @@ class Label(QtWidgets.QWidget, Themed):
             self._text = t
             self.updateGeometry()
             self.update()
+
+    def refresh_fonts(self):
+        """换字体后重算固定高度（宽高会随新字体的字形变化）。"""
+        if not self.wrap:
+            self.setFixedHeight(QtGui.QFontMetrics(self.font_).height() + 2)
+        self.updateGeometry()
+        self.update()
 
     def text(self) -> str:
         return self._text
@@ -440,6 +469,11 @@ class Segmented(QtWidgets.QWidget, Themed):
             if emit:
                 self.changed.emit(i)
 
+    def refresh_fonts(self):
+        fm = QtGui.QFontMetrics(ui_font(12, W.Medium))
+        self.setMinimumWidth(sum(fm.horizontalAdvance(t) + 24 for t in self.items))
+        self.update()
+
     def _tick(self):
         self.pos_.step(0.016)
         self.update()
@@ -515,6 +549,40 @@ class Sparkline(QtWidgets.QWidget, Themed):
             p.drawLine(QtCore.QPointF(r.x(), y), QtCore.QPointF(r.right(), y))
         p.setPen(QtGui.QPen(col, 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         p.drawPath(path)
+
+
+class UsageBar(QtWidgets.QWidget, Themed):
+    """细比例条：轨道 + 按 value 填充，用于流量 / 容量占比。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._value = 0.0
+        self.setFixedHeight(4)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
+        self._hook_theme()
+
+    def set_value(self, v: float):
+        self._value = clamp(float(v or 0.0), 0.0, 1.0)
+        self.update()
+
+    def value(self) -> float:
+        return self._value
+
+    def paintEvent(self, _e):
+        p = painter(self)
+        r = QtCore.QRectF(self.rect())
+        radius = r.height() / 2
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(theme.track())
+        p.drawRoundedRect(r, radius, radius)
+        if self._value <= 0:
+            return
+        width = max(r.height(), r.width() * self._value)
+        if width <= 0:
+            return
+        bar = QtCore.QRectF(r.x(), r.y(), width, r.height())
+        p.setBrush(theme.on_color())
+        p.drawRoundedRect(bar, radius, radius)
 
 
 class Card(QtWidgets.QFrame, Themed):

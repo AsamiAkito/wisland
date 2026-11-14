@@ -6,7 +6,8 @@
 
 信号 updated(dict):
   {ok, error, running, mode('rule'|'global'|'direct'), tun(bool), up, down (B/s), conns,
-   group, node, nodes:[names], delay(ms|None), sysproxy(bool), transport('http'|'pipe'|'')}
+   group, node, nodes:[names], delay(ms|None), sysproxy(bool), transport('http'|'pipe'|''),
+   sub:{used, total, expire}}   # 当前订阅流量配额（字节；expire 为 Unix 时间戳，0 = 未知）
 """
 from __future__ import annotations
 
@@ -169,6 +170,54 @@ def write_sysproxy(enable: bool, port: int):
     wininet.InternetSetOptionW(None, 37, None, 0)  # INTERNET_OPTION_REFRESH
 
 
+# ---------------- 订阅流量 ----------------
+
+def _sub_int(v) -> int | None:
+    """订阅配额里的数值：兼容字符串 / 浮点；None、非数字、负数都视为不合法。"""
+    if v is None:
+        return None
+    try:
+        n = int(float(v))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return n if n >= 0 else None
+
+
+def _sub_quota(item: dict) -> dict:
+    """从 profiles.yaml 的一个订阅 item 里取流量配额；不完整时返回 {}。"""
+    extra = item.get("extra")
+    if not isinstance(extra, dict):
+        return {}
+    upload, download = _sub_int(extra.get("upload")), _sub_int(extra.get("download"))
+    total = _sub_int(extra.get("total"))
+    if upload is None or download is None or not total:
+        return {}
+    expire = _sub_int(extra.get("expire")) or 0
+    return {"used": upload + download, "total": total, "expire": expire}
+
+
+def read_subscription(config_dir: str) -> dict:
+    """Clash Verge 当前订阅的流量配额；没有时返回 {}。"""
+    try:
+        import yaml
+        with open(os.path.join(config_dir, "profiles.yaml"), encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        if not isinstance(data, dict):
+            return {}
+        items = [it for it in (data.get("items") or []) if isinstance(it, dict)]
+        current = str(data.get("current") or "")
+        cur = next((it for it in items if current and str(it.get("uid") or "") == current), None)
+        if cur is not None:
+            return _sub_quota(cur)
+        for it in items:                       # current 失效时退回第一个有配额的订阅
+            sub = _sub_quota(it)
+            if sub:
+                return sub
+        return {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 # ---------------- service ----------------
 
 class ClashService(QtCore.QObject):
@@ -190,6 +239,8 @@ class ClashService(QtCore.QObject):
         self._last_totals: tuple[float, int, int] | None = None
         self._last_proxies_t = 0.0
         self._proxy_info: dict = {"group": "", "node": "", "nodes": [], "delay": None}
+        self._sub: dict = {}
+        self._sub_t = 0.0
         self.last: dict = {}
 
     # ---------- lifecycle ----------
@@ -221,6 +272,15 @@ class ClashService(QtCore.QObject):
             self._controller = str(c.get("external-controller") or "")
             self._pipe_cfg = str(c.get("external-controller-pipe") or "")
             return
+
+    def _subscription(self) -> dict:
+        """订阅流量：最多每 5 秒重读一次 profiles.yaml（避免每秒解析 YAML）。"""
+        now = time.monotonic()
+        if now - self._sub_t < 5.0:
+            return self._sub
+        self._sub_t = now
+        self._sub = read_subscription(expand(cfg.get("clash.config_dir") or ""))
+        return self._sub
 
     def _detect(self):
         self._load_config()
@@ -297,7 +357,8 @@ class ClashService(QtCore.QObject):
                 down_err = isinstance(e, (FileNotFoundError, httpx.ConnectError)) or "未运行" in str(e)
                 d = {"ok": False, "error": "Clash 未运行" if down_err else f"Clash 连接失败：{str(e)[:60]}",
                      "running": False, "mode": "", "tun": False, "up": 0, "down": 0, "conns": 0,
-                     "group": "", "node": "", "nodes": [], "delay": None, "sysproxy": en, "transport": ""}
+                     "group": "", "node": "", "nodes": [], "delay": None, "sysproxy": en, "transport": "",
+                     "sub": {}}
             self.last = d
             self.updated.emit(d)
             wait = (1.0 if d.get("ok") else 3.0) - (time.monotonic() - t0)
@@ -330,7 +391,8 @@ class ClashService(QtCore.QObject):
         return {"ok": True, "error": "", "running": True, "mode": mode, "tun": tun,
                 "up": up, "down": down, "conns": len(conn.get("connections") or []),
                 "group": pi.get("group", ""), "node": pi.get("node", ""), "nodes": list(pi.get("nodes", [])),
-                "delay": pi.get("delay"), "sysproxy": en, "transport": self._transport}
+                "delay": pi.get("delay"), "sysproxy": en, "transport": self._transport,
+                "sub": self._subscription()}
 
     @staticmethod
     def _last_delay(proxies: dict, name: str, depth: int = 0):

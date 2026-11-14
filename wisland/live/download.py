@@ -1,147 +1,247 @@
 # -*- coding: utf-8 -*-
-"""在 wisland 里直接下载实时字幕模型（约 630MB），不用另开命令行。
+"""实时字幕模型下载：断点续传、Hugging Face → hf-mirror 回退、进度 / 取消。
 
-- 依次尝试 HF_ENDPOINT 环境变量、huggingface.co、hf-mirror.com（国内镜像）
-- 有系统代理（Clash 等）时先走代理，失败再直连
-- 断点续传：下载中断后再点一次会接着下（临时文件 *.part）
+模型文件：
+- parakeet-ja-0.6b-int8/model.int8.onnx  （约 625 MB）
+- parakeet-ja-0.6b-int8/tokens.txt
+- silero_vad.onnx
 """
 from __future__ import annotations
 
 import os
+import re
 import threading
+import time
 from pathlib import Path
 
 import httpx
-from PySide6 import QtCore
+
+from .. import __version__ as APP_VERSION
 
 from .http_util import system_proxy
-from .paths import MODELS
+from .paths import models_dir
 
-PARAKEET = "csukuangfj/sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8"
+MODEL_REPO = "csukuangfj/sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8"
 VAD_REPO = "csukuangfj/sherpa-onnx-vad-models"
+HF_HOST = "https://huggingface.co"
+MIRROR_HOST = "https://hf-mirror.com"
 VAD_GITHUB = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
-
-# (保存位置, 仓库, 仓库内文件名, 大概大小 字节 —— 拿不到 Content-Length 时用来估算进度)
-FILES = [
-    ("silero_vad.onnx", VAD_REPO, "silero_vad.onnx", 644_000),
-    ("parakeet-ja-0.6b-int8/tokens.txt", PARAKEET, "tokens.txt", 29_000),
-    ("parakeet-ja-0.6b-int8/model.int8.onnx", PARAKEET, "model.int8.onnx", 655_542_604),
-]
+UA = f"wisland/{APP_VERSION} (live subtitle model downloader)"
+CHUNK = 256 * 1024
 
 
-def missing() -> list[tuple[str, str, str, int]]:
-    return [f for f in FILES if not (MODELS / f[0]).exists()]
+class DownloadCancelled(Exception):
+    """用户取消；已写入的 .part 保留，下次从这里续传。"""
 
 
 def _endpoints() -> list[str]:
-    out = []
-    for e in (os.environ.get("HF_ENDPOINT"), "https://huggingface.co", "https://hf-mirror.com"):
-        e = (e or "").strip().rstrip("/")
-        if e and e not in out:
-            out.append(e)
+    hosts: list[str] = []
+    env = (os.environ.get("HF_ENDPOINT") or "").strip().rstrip("/")
+    for host in (env, HF_HOST, MIRROR_HOST):
+        if host and host not in hosts:
+            hosts.append(host)
+    return hosts
+
+
+def _hf_urls(name: str) -> list[str]:
+    path = f"{MODEL_REPO}/resolve/main/{name}"
+    return [f"{host}/{path}" for host in _endpoints()]
+
+
+def _vad_urls() -> list[str]:
+    path = f"{VAD_REPO}/resolve/main/silero_vad.onnx"
+    urls = [f"{host}/{path}" for host in _endpoints()]
+    urls.insert(1, VAD_GITHUB)
+    out: list[str] = []
+    for url in urls:
+        if url not in out:
+            out.append(url)
     return out
-
-
-def _urls(repo: str, name: str) -> list[str]:
-    urls = [f"{e}/{repo}/resolve/main/{name}" for e in _endpoints()]
-    if name == "silero_vad.onnx":
-        urls.insert(1, VAD_GITHUB)
-    return urls
 
 
 def _clients() -> list[httpx.Client]:
-    t = httpx.Timeout(20.0, connect=8.0)
-    hdr = {"User-Agent": "wisland"}
-    out = []
-    px = system_proxy()
-    if px:
-        out.append(httpx.Client(proxy=px, timeout=t, follow_redirects=True, headers=hdr, trust_env=False))
-    out.append(httpx.Client(timeout=t, follow_redirects=True, headers=hdr, trust_env=False))
+    timeout = httpx.Timeout(30.0, connect=10.0, read=30.0)
+    hdr = {"User-Agent": UA}
+    out: list[httpx.Client] = []
+    proxy = system_proxy()
+    if proxy:
+        try:
+            out.append(httpx.Client(proxy=proxy, timeout=timeout, follow_redirects=True,
+                                    headers=hdr, trust_env=False))
+        except Exception:  # noqa: BLE001
+            pass
+    out.append(httpx.Client(timeout=timeout, follow_redirects=True, headers=hdr, trust_env=False))
     return out
 
 
-class ModelDownloader(QtCore.QObject):
-    progress = QtCore.Signal(float, str)     # (0..1, 说明文字)
-    finished = QtCore.Signal(bool, str)      # (成功, 失败原因)
+def model_specs() -> list[dict]:
+    root = models_dir()
+    para = root / "parakeet-ja-0.6b-int8"
+    return [
+        {"dest": para / "model.int8.onnx", "urls": _hf_urls("model.int8.onnx"),
+         "label": "日语识别模型"},
+        {"dest": para / "tokens.txt", "urls": _hf_urls("tokens.txt"),
+         "label": "识别词表"},
+        {"dest": root / "silero_vad.onnx", "urls": _vad_urls(),
+         "label": "静音检测模型"},
+    ]
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._thread: threading.Thread | None = None
-        self._cancel = threading.Event()
 
-    @property
-    def running(self) -> bool:
-        return bool(self._thread and self._thread.is_alive())
+def models_ready() -> bool:
+    try:
+        for spec in model_specs():
+            path = spec["dest"]
+            if not path.is_file() or path.stat().st_size <= 0:
+                return False
+    except OSError:
+        return False
+    return True
 
-    def start(self):
-        if self.running:
-            return
-        self._cancel.clear()
-        self._thread = threading.Thread(target=self._run, name="wisland-models", daemon=True)
-        self._thread.start()
 
-    def cancel(self):
-        self._cancel.set()
+def _part_path(dest: Path) -> Path:
+    return dest.with_name(dest.name + ".part")
 
-    # ---------------- 后台线程 ----------------
-    def _run(self):
-        todo = missing()
-        total = sum(f[3] for f in todo) or 1
-        done = 0
-        clients = _clients()
-        try:
-            for rel, repo, name, size in todo:
-                dest = MODELS / rel
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                err = ""
-                for url in _urls(repo, name):
-                    for c in clients:
-                        try:
-                            self._get(c, url, dest, lambda n, d=done: self._report(d + n, total))
-                            err = ""
-                            break
-                        except _Cancelled:
-                            self.finished.emit(False, "已取消")
-                            return
-                        except Exception as e:  # noqa: BLE001
-                            err = f"{type(e).__name__}: {e}"[:160]
-                    if dest.exists():
-                        break
-                if not dest.exists():
-                    self.finished.emit(False, "模型下载失败（" + (err or "网络错误") + "），检查网络或代理后再点一次会接着下载")
-                    return
-                done += size
-            self.finished.emit(True, "")
-        finally:
-            for c in clients:
-                c.close()
 
-    def _report(self, n: int, total: int):
-        f = min(1.0, n / total)
-        self.progress.emit(f, f"正在下载识别模型 {f * 100:.0f}%（{n / 1e6:.0f} / {total / 1e6:.0f} MB）")
+def _probe_size(clients: list[httpx.Client], spec: dict, cancel: threading.Event) -> int:
+    """尽力取得文件总大小；拿不到就返回 0（进度只显示已下载 MB）。"""
+    for url in spec.get("urls") or []:
+        for client in clients:
+            if cancel.is_set():
+                raise DownloadCancelled()
+            try:
+                r = client.head(url)
+                if r.status_code < 400:
+                    n = r.headers.get("content-length")
+                    if n and n.isdigit():
+                        return int(n)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                with client.stream("GET", url, headers={"Range": "bytes=0-0"}) as r:
+                    if r.status_code in (200, 206):
+                        m = re.search(r"/(\d+)\s*$", r.headers.get("content-range") or "")
+                        if m:
+                            return int(m.group(1))
+                        n = r.headers.get("content-length")
+                        if n and n.isdigit():
+                            return int(n)
+            except Exception:  # noqa: BLE001
+                pass
+    return 0
 
-    def _get(self, c: httpx.Client, url: str, dest: Path, on_bytes):
-        part = dest.with_name(dest.name + ".part")
-        have = part.stat().st_size if part.exists() else 0
-        headers = {"Range": f"bytes={have}-"} if have else {}
-        with c.stream("GET", url, headers=headers) as r:
-            if r.status_code == 416:          # 已经下完
-                part.replace(dest)
-                return
-            r.raise_for_status()
-            if have and r.status_code != 206:  # 服务器不支持续传：从头下
-                have = 0
-            with open(part, "ab" if have else "wb") as f:
-                n = have
-                on_bytes(n)
-                for chunk in r.iter_bytes(1 << 20):
-                    if self._cancel.is_set():
-                        raise _Cancelled()
+
+def _stream_to_part(client: httpx.Client, url: str, part: Path, cancel: threading.Event,
+                    progress) -> None:
+    """下载到 .part；有旧内容时用 Range 续传。"""
+    for attempt in range(2):
+        pos = part.stat().st_size if part.exists() else 0
+        headers = {"Range": f"bytes={pos}-"} if pos else {}
+        with client.stream("GET", url, headers=headers) as r:
+            if r.status_code == 416 and pos:
+                part.unlink(missing_ok=True)
+                continue
+            if pos and r.status_code == 206:
+                mode, done = "ab", pos
+            else:
+                if r.status_code >= 400:
+                    r.raise_for_status()
+                mode, done = "wb", 0
+            total = 0
+            m = re.search(r"/(\d+)\s*$", r.headers.get("content-range") or "")
+            if m:
+                total = int(m.group(1))
+            elif r.headers.get("content-length"):
+                try:
+                    total = done + int(r.headers["content-length"])
+                except ValueError:
+                    total = 0
+            last_t, last_n = 0.0, done
+            part.parent.mkdir(parents=True, exist_ok=True)
+            with open(part, mode) as f:
+                for chunk in r.iter_bytes(CHUNK):
+                    if cancel.is_set():
+                        raise DownloadCancelled()
                     f.write(chunk)
-                    n += len(chunk)
-                    on_bytes(n)
-        part.replace(dest)
+                    done += len(chunk)
+                    now = time.monotonic()
+                    if now - last_t >= 0.25 or done - last_n >= 4 * 1024 * 1024:
+                        progress(done, total)
+                        last_t, last_n = now, done
+            progress(done, total)
+            if total and done < total:
+                raise IOError("下载不完整，请重试")
+            return
+    raise IOError("服务器不支持断点续传")
 
 
-class _Cancelled(Exception):
-    pass
+def _download_spec(clients: list[httpx.Client], spec: dict, cancel: threading.Event,
+                   progress, note) -> int:
+    dest = spec["dest"]
+    expected = int(spec.get("size") or 0)
+    if dest.is_file() and dest.stat().st_size > 0:
+        if not expected or dest.stat().st_size == expected:
+            return dest.stat().st_size
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = _part_path(dest)
+    last = None
+    urls = spec.get("urls") or []
+    for i, url in enumerate(urls):
+        for client in clients:
+            try:
+                _stream_to_part(client, url, part, cancel, progress)
+                if expected and part.stat().st_size != expected:
+                    raise IOError("文件大小校验失败")
+                os.replace(part, dest)
+                return dest.stat().st_size
+            except DownloadCancelled:
+                raise
+            except Exception as e:  # noqa: BLE001
+                last = e
+                continue
+        if i + 1 < len(urls):
+            note("下载源连接失败，改用备用镜像…")
+    raise last or IOError("下载失败")
+
+
+def download_models(cancel: threading.Event | None = None, progress=None, note=None) -> None:
+    """下载缺失的模型；取消时抛出 DownloadCancelled，保留 .part 供续传。"""
+    cancel = cancel or threading.Event()
+    progress = progress or (lambda done, total, label: None)
+    note = note or (lambda text: None)
+    specs = model_specs()
+    if models_ready():
+        return
+    note("正在检查模型文件…")
+    clients = _clients()
+    try:
+        for spec in specs:
+            if cancel.is_set():
+                raise DownloadCancelled()
+            spec["size"] = _probe_size(clients, spec, cancel)
+        total = sum(int(s.get("size") or 0) for s in specs)
+        sizes_known = total > 0
+        done_base = 0
+        for spec in specs:
+            if cancel.is_set():
+                raise DownloadCancelled()
+            dest = spec["dest"]
+            label = spec.get("label") or dest.name
+            expected = int(spec.get("size") or 0)
+            if dest.is_file() and dest.stat().st_size > 0 and (not expected or dest.stat().st_size == expected):
+                done_base += dest.stat().st_size
+                progress(done_base, total if sizes_known else done_base, label)
+                continue
+            note(f"正在下载{label}…")
+
+            def on_progress(done: int, _file_total: int, base=done_base, label=label):
+                progress(base + done, total if sizes_known else (base + _file_total), label)
+
+            got = _download_spec(clients, spec, cancel, on_progress, note)
+            done_base += got
+            progress(done_base, total if sizes_known else done_base, label)
+    finally:
+        for client in clients:
+            client.close()
+    if not models_ready():
+        raise IOError("模型文件下载完成但校验失败，请重试")
+    progress(total if sizes_known else done_base, total if sizes_known else done_base, "模型已就绪")

@@ -8,7 +8,7 @@ from ...core.bg import run_bg
 from ..anim import clamp
 from ..theme import G, W, icon_font, theme, ui_font
 from ..widgets import (Card, Hoverable, IconButton, Label, PillButton, ScrollArea, Segmented, Slider, Sparkline,
-                       Themed, Tile, fmt_bytes, hbox, painter, vbox)
+                       Themed, Tile, UsageBar, fmt_bytes, hbox, painter, vbox)
 from .base import Page
 
 Qt = QtCore.Qt
@@ -60,7 +60,8 @@ def styled_menu(parent=None) -> QtWidgets.QMenu:
     m.setWindowFlag(Qt.WindowType.NoDropShadowWindowHint)
     bg, fg, sel = theme.menu_qss()
     m.setStyleSheet(
-        f"QMenu{{background:{bg};border-radius:14px;padding:6px;color:{fg};font-family:'HarmonyOS Sans','Microsoft YaHei UI';font-size:13px}}"
+        f"QMenu{{background:{bg};border-radius:14px;padding:6px;color:{fg};"
+        f"font-family:{theme.font_css()};font-size:13px}}"
         f"QMenu::item{{padding:6px 22px 6px 14px;border-radius:9px}}"
         f"QMenu::item:selected{{background:{sel}}}"
         f"QMenu::item:disabled{{color:gray}}"
@@ -70,7 +71,7 @@ def styled_menu(parent=None) -> QtWidgets.QMenu:
 
 
 class ControlsPage(Page):
-    key, glyph, title, height = "ctl", G.SLIDERS, "控制", 180
+    key, glyph, title, height = "ctl", G.SLIDERS, "控制", 202
 
     def __init__(self, ctx):
         super().__init__(ctx)
@@ -108,7 +109,16 @@ class ControlsPage(Page):
         openv.clicked.connect(lambda: ctx.clash.open_app())
         self.card.setLayout(vbox(hbox(self.clash_state, None, self.speed, openv, spacing=6),
                                  hbox(self.mode, None, self.node, spacing=8), spacing=6, margins=(14, 10, 10, 10)))
-        left = vbox(self.vol, self.bri, self.card, None, spacing=8)
+        # 订阅流量：仅 Clash 运行中且读得到配额时显示
+        self.sub_text = Label("", 11, level=2, num=True)
+        self.sub_pct = Label("", 11, level=2, num=True,
+                             align=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.sub_bar = UsageBar()
+        self.sub_usage = QtWidgets.QWidget()
+        self.sub_usage.setLayout(vbox(hbox(self.sub_text, None, self.sub_pct, spacing=6),
+                                      self.sub_bar, spacing=4, margins=(14, 0, 10, 0)))
+        self.sub_usage.hide()
+        left = vbox(self.vol, self.bri, self.card, self.sub_usage, None, spacing=8)
         for w in (self.card, self.proxy, self.tun):
             w.hide()
         gw = QtWidgets.QWidget()
@@ -154,8 +164,7 @@ class ControlsPage(Page):
     def set_radio(self, d: dict):
         self._radio = d
         self.wifi.set_state(bool(d.get("wifi_on")),
-                            (d.get("wifi_ssid") or ("已开启" if d.get("wifi_on") else "已关闭"))
-                            + (f" · {d['wifi_signal']}%" if d.get("wifi_signal") and d.get("wifi_ssid") else ""),
+                            "已开启" if d.get("wifi_on") else "已关闭",
                             d.get("wifi_available", True))
         bt_ok = d.get("bt_available", True)
         self.bt.set_state(bool(d.get("bt_on")),
@@ -182,6 +191,15 @@ class ControlsPage(Page):
             self.clash_state.setText("Clash 未运行")
             self.speed.setText(d.get("error") or "")
             self.node.set_text("—")
+        sub = d.get("sub") or {}
+        used, total = int(sub.get("used") or 0), int(sub.get("total") or 0)
+        if ok and total > 0:
+            self.sub_usage.show()
+            self.sub_text.setText(f"已用 {fmt_bytes(used)} / {fmt_bytes(total)}")
+            self.sub_pct.setText(f"{round(used / total * 100)}%")
+            self.sub_bar.set_value(used / total)
+        else:
+            self.sub_usage.hide()
 
     def _node_menu(self):
         d = self._clash

@@ -8,6 +8,77 @@ UI_FAMILIES = ["HarmonyOS Sans", "MiSans", "Segoe UI Variable Text", "Microsoft 
 NUM_FAMILIES = ["HarmonyOS Sans", "Segoe UI Variable Display", "Segoe UI"]
 ICON_FAMILIES = ["Segoe Fluent Icons", "Segoe MDL2 Assets"]
 
+# 「设置 → 外观与交互 → 字体」里选的自定义字体（本机字体库里的 family 名）。
+# 空字符串 = 用上面的内置字体栈；自定义字体排在第一位，缺字形时自动回退到内置字体。
+_font_family = ""
+
+
+def font_family() -> str:
+    return _font_family
+
+
+def font_stack(num: bool = False) -> list[str]:
+    """实际使用的字体族列表；num=True 时优先用数字字体。"""
+    base = NUM_FAMILIES + UI_FAMILIES if num else UI_FAMILIES
+    stack = ([_font_family] if _font_family else []) + list(base)
+    return list(dict.fromkeys(stack))          # 去重，保持顺序
+
+
+def set_font_family(family: str) -> bool:
+    """切换自定义字体；返回是否真的发生了变化。空字符串 = 恢复内置字体栈。"""
+    global _font_family
+    fam = str(family or "").strip()
+    if fam == _font_family:
+        return False
+    _font_family = fam
+    return True
+
+
+def font_css() -> str:
+    """QSS 用的 font-family 值。名字统一加引号，含空格或逗号也能正确解析。"""
+    return ", ".join("'" + f.replace("\\", "\\\\").replace("'", "\\'") + "'" for f in font_stack())
+
+
+def refresh_widget_fonts() -> None:
+    """自定义字体变化后，把已经建好的界面也换成新字体。
+
+    - 自绘控件在 paintEvent 里调用 ui_font()，只要重绘就会用上新字体；
+    - QLabel / QLineEdit 这类把 QFont 存在控件里的，需要把字体族换掉；
+    - 图标字体（Segoe Fluent Icons 等）保持不动，否则图标会变成方框；
+    - 自定义控件可以定义 refresh_fonts()，在换字体时重算缓存下来的宽度。
+    """
+    from PySide6 import QtWidgets
+
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        return
+    # Qt 自带的提示框 / 输入框右键菜单也跟着换字体；字号保持系统默认（跟随系统缩放）
+    base = QtGui.QFont(app.font())
+    base.setFamilies(font_stack())
+    app.setFont(base)
+    icons = set(ICON_FAMILIES)
+    stack = font_stack()
+    for w in app.allWidgets():
+        try:
+            f = QtWidgets.QWidget.font(w)    # 用基类实现，避免子类自定义的 font() 被误调用
+            if f.pixelSize() > 0 and not (icons & set(f.families())):
+                f.setFamilies(stack)
+                w.setFont(f)
+                w.updateGeometry()
+        except RuntimeError:                 # 控件已经被销毁
+            continue
+        hook = getattr(w, "refresh_fonts", None)
+        if callable(hook):
+            try:
+                hook()
+            except RuntimeError:
+                pass
+    for w in app.allWidgets():
+        try:
+            w.update()
+        except RuntimeError:
+            pass
+
 
 class G:
     """Segoe Fluent Icons 码位。"""
@@ -49,6 +120,8 @@ class G:
     CHECK = "\uE73E"
     BELL = "\uEA8F"
     CHAT = "\uE8F2"
+    SEND = "\uE724"
+    CONTACT = "\uE77B"
     MUSIC = "\uE8D6"
     MONITOR = "\uE7F4"
     TRASH = "\uE74D"
@@ -60,11 +133,13 @@ class G:
     EYE_OFF = "\uED1A"
     SEARCH = "\uE721"
     LIVE = "\uE720"   # 麦克风
+    INFO = "\uE946"
+    LINK = "\uE71B"
 
 
 def ui_font(px: float, weight: QtGui.QFont.Weight = QtGui.QFont.Weight.Normal, num: bool = False) -> QtGui.QFont:
     f = QtGui.QFont()
-    f.setFamilies(NUM_FAMILIES + UI_FAMILIES if num else UI_FAMILIES)
+    f.setFamilies(font_stack(num))
     f.setPixelSize(max(1, round(px)))
     f.setWeight(weight)
     f.setHintingPreference(QtGui.QFont.HintingPreference.PreferNoHinting)
@@ -174,6 +249,16 @@ class Theme(QtCore.QObject):
         if changed:
             self.changed.emit()
 
+    # --- 字体（自定义字体来自本机字体库） ---
+    def set_font_family(self, family: str) -> bool:
+        return set_font_family(family)
+
+    def refresh_fonts(self) -> None:
+        refresh_widget_fonts()
+
+    def font_css(self) -> str:
+        return font_css()
+
     # --- 颜色（按当前主题的色板） ---
     def _c(self, key: str, a: float = 1.0) -> QtGui.QColor:
         c = QtGui.QColor(*self.pal[key]) if isinstance(self.pal[key], tuple) else QtGui.QColor(self.pal[key])
@@ -235,6 +320,32 @@ class Theme(QtCore.QObject):
     def on_color(self) -> QtGui.QColor:
         return self._c("on")
 
+    def link(self) -> QtGui.QColor:
+        """链接 / 强调文字色：深色往白里提亮，浅色往黑里压深，保证玻璃底上的对比度。"""
+        base = self.on_color()
+        target = QtGui.QColor(255, 255, 255) if self.dark else QtGui.QColor(0, 0, 0)
+        k = 0.38 if self.dark else 0.27
+        color = QtGui.QColor(
+            round(base.red() + (target.red() - base.red()) * k),
+            round(base.green() + (target.green() - base.green()) * k),
+            round(base.blue() + (target.blue() - base.blue()) * k),
+        )
+        color.setAlphaF(base.alphaF())
+        return color
+
+    def ok(self) -> QtGui.QColor:
+        """成功状态色：浅色主题的默认绿色偏亮，压深一点再用于小字。"""
+        if self.dark:
+            return self.down()
+        return QtGui.QColor("#066b47")
+
+    def primary_fill(self) -> QtGui.QColor:
+        """主按钮填充：只有深色主题略微加深，提升白字对比度；其他主题保持原色。"""
+        base = self.on_color()
+        if self.pal_name == "dark":
+            base = base.darker(112)
+        return base
+
     def on_fg(self, a: float = 1.0) -> QtGui.QColor:
         c = QtGui.QColor(self.pal.get("on_fg", "#ffffff"))
         c.setAlphaF(a)
@@ -266,8 +377,21 @@ KIND_COLORS = {
     "qq": QtGui.QColor("#12b7f5"),
     "wechat": QtGui.QColor("#07c160"),
     "mail": QtGui.QColor("#ff9f0a"),
+    "feishu": QtGui.QColor("#00c2a8"),
+    "dingtalk": QtGui.QColor("#1e9bff"),
+    "dsh": QtGui.QColor("#4d6bfe"),
     "stock": QtGui.QColor("#ff5a52"),
     "other": QtGui.QColor("#8e8e93"),
+}
+
+# 新消息呼吸灯用的浅色（比品牌色更亮，深色玻璃上更明显）
+KIND_LIGHT_COLORS = {
+    "qq": QtGui.QColor("#8fd3ff"),
+    "wechat": QtGui.QColor("#8ff0dd"),
+    "mail": QtGui.QColor("#ffc58a"),
+    "feishu": QtGui.QColor("#c9b8ff"),
+    "dingtalk": QtGui.QColor("#ffe08a"),
+    "dsh": QtGui.QColor("#b9c6ff"),
 }
 
 theme = Theme()

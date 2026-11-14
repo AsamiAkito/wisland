@@ -14,23 +14,7 @@ from ctypes import wintypes as W
 
 from PySide6 import QtCore, QtGui
 
-from wisland.core.bg import launch, run_hidden, ui
-
-
-def _decode(data: bytes) -> str:
-    """netsh 等命令输出：先试 UTF-8，再按 OEM 代码页（中文系统为 cp936）。"""
-    if not data:
-        return ""
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        pass
-    for enc in (f"cp{ctypes.windll.kernel32.GetOEMCP()}", "mbcs", "gbk"):
-        try:
-            return data.decode(enc)
-        except Exception:  # noqa: BLE001
-            continue
-    return data.decode("utf-8", "replace")
+from wisland.core.bg import launch, ui
 
 
 # ======================================================================
@@ -49,8 +33,11 @@ except Exception:  # noqa: BLE001
 
 
 class RadioService(QtCore.QObject):
-    """changed(dict): {wifi_on, wifi_ssid, wifi_signal(int % 或 None), bt_on,
-    wifi_available, bt_available}"""
+    """changed(dict): {wifi_on, bt_on, wifi_available, bt_available}
+
+    只读无线电的开 / 关状态；不读取 Wi-Fi 名称或信号强度。
+    Windows 11 24H2 起读取 SSID 会被算作访问位置，任务栏位置图标会反复闪烁。
+    """
 
     changed = QtCore.Signal(dict)
     # 只读开关状态（Radio API，开销很小）；控制页打开时会立即刷新一次
@@ -59,8 +46,8 @@ class RadioService(QtCore.QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         ui(lambda: None)
-        self.state: dict = {"wifi_on": False, "wifi_ssid": "", "wifi_signal": None,
-                            "bt_on": False, "wifi_available": False, "bt_available": False}
+        self.state: dict = {"wifi_on": False, "bt_on": False,
+                            "wifi_available": False, "bt_available": False}
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -151,8 +138,6 @@ class RadioService(QtCore.QObject):
                     st["bt_on"] = st["bt_on"] or on
         except Exception:  # noqa: BLE001
             traceback.print_exc()
-        # 不再调用 netsh wlan 读取 Wi-Fi 名称：Windows 11 24H2 起它算作「访问位置」，
-        # 每次轮询任务栏都会闪位置图标。
         self.state = st
         if st != self._last_emit:
             self._last_emit = dict(st)

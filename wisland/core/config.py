@@ -5,12 +5,20 @@ from __future__ import annotations
 import copy
 import json
 import os
+import sys
 import threading
 from pathlib import Path
 
 from PySide6 import QtCore
 
-ROOT = Path(__file__).resolve().parents[2]
+def _app_root() -> Path:
+    """源码运行 = 仓库根目录；PyInstaller 打包后 = exe 所在目录（config.json / data 跟着 exe 走）。"""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[2]
+
+
+ROOT = _app_root()
 CONFIG_PATH = ROOT / "config.json"
 DATA_DIR = ROOT / "data"
 DATA_DIR.mkdir(exist_ok=True)
@@ -21,13 +29,17 @@ DEFAULTS: dict = {
         "pos": 0.5,                 # 沿边位置 0..1
         "screen": 0,
         "theme": "auto",            # auto / light / dark
+        "font_family": "",          # 自定义字体（本机字体库里的 family 名）；空 = 内置字体栈
         "hide_fullscreen": False,      # True = 前台全屏（游戏/视频）时隐藏灵动岛
+        "keep_on_top": True,           # True = 始终置顶（默认）；False = 允许被其他窗口盖住
+        "hover_expand": True,          # False = 悬停不自动展开，单击才展开；长按 / 拖拽不算点击
         "hover_expand_ms": 120,
         "collapse_delay_ms": 320,
         "exclude_from_capture": False,  # False = 灵动岛出现在截图 / 录屏里（取背景时只临时排除自己）
         "blur_fps": 8,
         "scale": 1.0,
         "default_tab": "home",
+        "hidden_tabs": [],          # 隐藏的板块（标签页）：stock / weather / ctl / clip / trans
         "expand_mode": "hover",     # hover = 悬停展开 / always = 常驻展开 / never = 保持收起
         "pinned": False,            # 旧版"保持展开"（兼容）
         "compact_view": "clock",    # 收起态视图：clock / pet / music（滚轮切换）
@@ -41,16 +53,42 @@ DEFAULTS: dict = {
     },
     "media": {
         "auto_show": True,           # 开始播放时收起态自动切到音乐（暂停 8 秒后切回）
-        "lyrics": True,              # 收起态显示歌词（网易云公开歌词接口）
+        "lyrics": True,              # 收起态显示滚动歌词（网易云优先，失败回退 LRCLIB / 自定义源）
         "netease_log": True,         # 读取网易云本地日志获得播放状态与进度（网易云默认不接入系统媒体控件）
+        # 按顺序尝试的歌词源：netease / lrclib / custom；用英文逗号分隔
+        "lyrics_sources": "netease,lrclib,custom",
+        # 自定义歌词 API：URL 可用 {title} {artist} {album} {duration} {song_id} 占位
+        "lyrics_custom_url": "",
         "priority": ["cloudmusic", "bilibili", "chrome", "zen", "msedge", "firefox"],
     },
     "notify": {
-        # wpndatabase 中的 NotificationHandler.PrimaryId 前缀 -> 显示名 / 类型
+        # 消息页默认显示的模块：qq / wechat / mail；默认不含 dsh，飞书 / 钉钉 / dsh 可在
+        # 设置→消息 的「启用的模块」或消息页点 + 手动添加
+        "modules": ["qq", "wechat", "mail"],
+        # 弹出提醒时显示正文预览的模块。飞书 / 钉钉会从右下角通知浮窗读取发送人和正文；
+        # 其他应用只有把通知写进 Windows 通知中心才有正文可读，任务栏闪烁只能拿到应用名。
+        "body_preview": ["feishu", "dingtalk"],
+        # 新消息桌面提示框：可关闭；位置见 settings 里的六种；100 = 当前默认尺寸
+        "popup": {"enabled": True, "position": "bottom_right", "size": 100},
+        # wpndatabase 中的 NotificationHandler.PrimaryId 前缀 -> 显示名 / 类型（不区分大小写）
         "toast_apps": {
             "QQ": {"name": "QQ", "kind": "qq"},
-            "ThunderbirdToast": {"name": "邮件", "kind": "mail"},
             "Weixin": {"name": "微信", "kind": "wechat"},
+            "ThunderbirdToast": {"name": "邮件", "kind": "mail", "open": "thunderbird.exe"},
+            # Windows「邮件」应用 / 新版 Outlook / 经典 Outlook：自动识别它们的系统通知
+            "microsoft.windowscommunicationsapps_8wekyb3d8bbwe!microsoft.windowslive.mail": {"name": "邮件", "kind": "mail", "open": "hxoutlook.exe"},
+            "Microsoft.OutlookForWindows": {"name": "邮件", "kind": "mail", "open": "olk.exe"},
+            "Microsoft.Outlook": {"name": "邮件", "kind": "mail", "open": "outlook.exe"},
+            "Outlook": {"name": "邮件", "kind": "mail", "open": "outlook.exe"},
+            # 飞书 / 钉钉（Electron 应用的通知 AUMID 可能因版本不同而变化，这里多列几种常见值）
+            "com.electron.Feishu": {"name": "飞书", "kind": "feishu"},
+            "electron.app.Feishu": {"name": "飞书", "kind": "feishu"},
+            "Feishu": {"name": "飞书", "kind": "feishu"},
+            "Lark": {"name": "飞书", "kind": "feishu"},
+            "electron.app.Lark": {"name": "飞书", "kind": "feishu"},
+            "DingTalk": {"name": "钉钉", "kind": "dingtalk"},
+            "electron.app.DingTalk": {"name": "钉钉", "kind": "dingtalk"},
+            "com.alibaba.dingtalk": {"name": "钉钉", "kind": "dingtalk"},
         },
         # 任务栏闪烁（FlashWindow）的进程 -> 显示名 / 类型
         "flash_processes": {
@@ -58,12 +96,30 @@ DEFAULTS: dict = {
             "wechat.exe": {"name": "微信", "kind": "wechat"},
             "qq.exe": {"name": "QQ", "kind": "qq"},
             "thunderbird.exe": {"name": "邮件", "kind": "mail"},
+            "hxoutlook.exe": {"name": "邮件", "kind": "mail"},      # Windows「邮件」
+            "olk.exe": {"name": "邮件", "kind": "mail"},            # 新版 Outlook
+            "outlook.exe": {"name": "邮件", "kind": "mail"},        # 经典 Outlook
+            "feishu.exe": {"name": "飞书", "kind": "feishu"},
+            "lark.exe": {"name": "飞书", "kind": "feishu"},
+            "dingtalk.exe": {"name": "钉钉", "kind": "dingtalk"},
         },
         "open": {
-            "qq": "",          # 例：C:/Program Files/Tencent/QQNT/QQ.exe
-            "wechat": "",      # 例：C:/Program Files/Tencent/Weixin/Weixin.exe
-            "mail": "",        # 例：C:/Program Files/Mozilla Thunderbird/thunderbird.exe
+            "qq": "",          # 留空时每次启动会自动检测本地程序；也可改成自己的路径
+            "wechat": "",
+            "mail": "",
+            "feishu": "",
+            "dingtalk": "",
+            "dsh": "",
         },
+    },
+    "dsh": {
+        # DeepSeek 桌面版（DSH）：只读会话日志，在一轮回答结束后提醒
+        "enabled": True,
+        # 留空 = %USERPROFILE%\.dsh\sessions
+        "sessions_dir": "",
+        "include_subagents": False,   # 子代理会话（delegationDepth > 0）默认不提醒
+        "skip_when_active": True,     # DSH 窗口在前台时不弹（和 dsh-pet 的系统通知一致）
+        "body_chars": 120,            # 正文预览长度
     },
     "stocks": {
         # 自选（腾讯财经代码：sh/sz/bj + 6 位，hk + 5 位，us + 代码）；也可在股票页点 + 搜索添加、右键删除
@@ -74,13 +130,16 @@ DEFAULTS: dict = {
     },
     "weather": {
         "api_key": "",         # 留空 = 使用 Open-Meteo（免费、无需 Key）；填 OpenWeather Key 则改用 OpenWeather
-        "city": "上海",
+        "city": "上海",         # IP 定位失败时的默认城市
         "lat": None,
         "lon": None,
         "units": "metric",
         "lang": "zh_cn",
         "interval_min": 15,
-        "cities": [],          # [{"name": "上海", "lat": 31.23, "lon": 121.47}]，第一个显示在收起态
+        # 用户自己添加的城市（不含跟随 IP 的默认城市）；默认城市显示在收起态和列表首位
+        "cities": [],          # [{"name": "上海", "lat": 31.23, "lon": 121.47}]
+        "ip_city": None,       # 上次按公网 IP 定位到的城市缓存，随网络变化自动更新
+        "pinned_city": None,   # 右键「绑定主城市」后固定显示的城市；None = 跟随 IP
     },
     "brightness": {"twinkle": ""},   # 留空 = 直接用 DDC/CI / WMI（便携版 Twinkle 每次调用都会弹"安装中"）
     "clash": {
@@ -124,8 +183,8 @@ DEFAULTS: dict = {
         "source": "",
     },
     "clipboard": {"max": 10},      # 只保留最近 10 条（置顶的不计）
-    "launcher": [
-        {"name": "文件资源管理器", "path": "C:/Windows/explorer.exe"},
+    "launcher": [                   # 主页底部的应用启动器；可放任意文件
+        {"name": "文件资源管理器", "path": "%WINDIR%/explorer.exe"},
     ],
 }
 

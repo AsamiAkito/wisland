@@ -41,7 +41,7 @@ class _Parakeet:
         model = MODEL_DIR / "model.int8.onnx"
         tokens = MODEL_DIR / "tokens.txt"
         if not (model.is_file() and tokens.is_file()):
-            raise FileNotFoundError("日语识别模型不完整，请重新安装软件")
+            raise FileNotFoundError("日语识别模型不完整，请在实时字幕页重新下载")
         self._recognizer = sherpa_onnx.OfflineRecognizer.from_nemo_ctc(
             model=str(model), tokens=str(tokens), num_threads=self.num_threads,
         )
