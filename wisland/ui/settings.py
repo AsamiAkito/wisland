@@ -3700,7 +3700,8 @@ class SettingsWindow(QtWidgets.QWidget):
 
         f.section("桌面弹窗")
         f.switch("notify.popup.enabled", "新消息弹出提示框",
-                 "在屏幕指定位置显示圆角提示框，淡入淡出；每条消息独立显示 3 秒，多条会按位置堆叠。")
+                 "在屏幕指定位置显示圆角提示框，淡入淡出；每条消息独立显示 3 秒，多条会按位置堆叠；"
+                 "鼠标移入暂停倒计时，点击提示框打开对应应用并切到前台。")
         f.choice("notify.popup.position", "弹出位置",
                  "多条消息会从边缘向中间排列。",
                  POPUP_POSITIONS, width=165)

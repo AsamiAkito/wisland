@@ -390,7 +390,15 @@ def main():
         glow = KIND_LIGHT_COLORS.get(kind)
         if glow is not None:
             island.breath(glow, 5.0)
-        popups.show(kind, title, sub, island.scr)
+
+        def open_source(kind=kind):
+            # 点击弹窗：打开对应来源应用并切到前台；异常不能冒到 Qt 事件循环
+            try:
+                ctx.notify.open(kind)
+            except Exception as e:  # noqa: BLE001
+                print("[notify] 点击弹窗打开应用失败：", e)
+
+        popups.show(kind, title, sub, island.scr, open_source)
         island.activity({"glyph": glyph, "color": KIND_COLORS.get(kind, KIND_COLORS["other"]),
                          "icon": kind_pixmap(kind),
                          "title": title, "sub": sub}, 4.0)

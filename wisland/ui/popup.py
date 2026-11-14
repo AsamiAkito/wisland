@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ..core.config import cfg
@@ -45,7 +47,8 @@ class Popup(QtWidgets.QWidget):
     closed = QtCore.Signal()
 
     def __init__(self, kind: str, title: str, sub: str, screen: QtGui.QScreen | None = None,
-                 down: bool = False, scale: float = 1.0):
+                 down: bool = False, scale: float = 1.0,
+                 on_open: Callable[[], None] | None = None):
         super().__init__(None, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint |
                          Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.WindowDoesNotAcceptFocus)
         self.kind = kind
@@ -56,9 +59,17 @@ class Popup(QtWidgets.QWidget):
         self.scale = max(0.5, min(2.0, float(scale)))
         self._vanish = 0.0
         self._vanish_anim = None
+        self._on_open = on_open
+        self._clicked = False
+        self._hover = False
+        self._fading = False
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        if on_open is not None:
+            # 可点击的提示框：接收鼠标事件并显示手型光标，但仍不抢焦点
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+        else:
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setFixedSize(max(1, round(WIN_W * self.scale)), max(1, round(WIN_H * self.scale)))
         self._pm = kind_pixmap(kind)
@@ -96,6 +107,8 @@ class Popup(QtWidgets.QWidget):
     def _fade_out(self):
         if self._finished:
             return
+        self._fading = True
+        self._hover = False
         self._hold.stop()
         if self._anim is not None:
             self._anim.stop()
@@ -154,6 +167,46 @@ class Popup(QtWidgets.QWidget):
         self._move.setEndValue(pos)
         self._move.setEasingCurve(QtCore.QEasingCurve.Type.OutCubic)
         self._move.start()
+
+    # ---------------- 鼠标交互（仅带 on_open 的提示框） ----------------
+    def enterEvent(self, e):
+        # 悬停期间暂停自动消失，并画一圈强调色描边提示这一条可以点击
+        if self._on_open is None or self._finished or self._fading:
+            super().enterEvent(e)
+            return
+        self._hover = True
+        self._hold.stop()
+        self.update()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):
+        if self._on_open is not None and self._hover:
+            self._hover = False
+            self.update()
+            # 只有仍在正常显示时才恢复完整的 3 秒倒计时
+            if not self._finished and not self._fading:
+                self._hold.start(DURATION_MS)
+        super().leaveEvent(e)
+
+    def mousePressEvent(self, e):
+        if self._on_open is not None and e.button() == Qt.MouseButton.LeftButton:
+            e.accept()
+            return
+        super().mousePressEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        cb = self._on_open
+        if cb is None or e.button() != Qt.MouseButton.LeftButton:
+            super().mouseReleaseEvent(e)
+            return
+        inside = self.rect().contains(e.position().toPoint())
+        e.accept()
+        if not inside or self._clicked or self._finished:
+            return
+        # 先关闭（让管理列表移除并重排其它弹窗），再打开来源应用
+        self._clicked = True
+        self.kill_now()
+        cb()
 
     # ---------------- 绘制 ----------------
     def paintEvent(self, _e):
@@ -236,6 +289,11 @@ class Popup(QtWidgets.QWidget):
         p.drawText(QtCore.QRectF(tx, card.y() + 40, tw, 20),
                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
                    fm.elidedText(self.sub, Qt.TextElideMode.ElideRight, int(tw)))
+        # 悬停时用主题强调色描边，提示这一条可以点击打开来源应用
+        if self._hover:
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QtGui.QPen(accent, 2))
+            p.drawRoundedRect(card.adjusted(1, 1, -1, -1), 17, 17)
 
 
 class MessagePopups:
@@ -249,13 +307,14 @@ class MessagePopups:
         key = str(cfg.get("notify.popup.position", "bottom_right") or "bottom_right")
         return key if key in POSITION_KEYS else "bottom_right"
 
-    def show(self, kind: str, title: str, sub: str, screen: QtGui.QScreen | None = None):
+    def show(self, kind: str, title: str, sub: str, screen: QtGui.QScreen | None = None,
+             on_open: Callable[[], None] | None = None):
         if not cfg.get("notify.popup.enabled", True):
             return
         key = self._position_key()
         p = Popup(kind, title, sub, screen,
                   down=key in ("center_bottom", "bottom_left", "bottom_right"),
-                  scale=_size_scale())
+                  scale=_size_scale(), on_open=on_open)
         p.closed.connect(lambda p=p: self._remove(p))
         self.items.append(p)
         scr = screen or QtGui.QGuiApplication.primaryScreen()
