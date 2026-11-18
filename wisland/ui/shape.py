@@ -72,6 +72,33 @@ def body_path(rect: QtCore.QRectF, radii: tuple[float, float, float, float]) -> 
     return p
 
 
+def anchored_path(rect: QtCore.QRectF, edge: str, fillet: float, radius: float) -> QtGui.QPainterPath:
+    """完全贴边时直接绘制外轮廓，保留贝塞尔曲线，省去布尔并集的多边形展开。"""
+    horiz = edge in ("top", "bottom")
+    c = rect.center().x() if horiz else rect.center().y()
+    half = (rect.width() if horiz else rect.height()) / 2
+    depth = rect.height() if horiz else rect.width()
+    line = {"top": rect.top(), "bottom": rect.bottom(),
+            "left": rect.left(), "right": rect.right()}[edge]
+    m = edge_map(edge, line)
+    left, right = c - half, c + half
+    p = QtGui.QPainterPath()
+    p.moveTo(m(left - fillet, -1.5))
+    p.lineTo(m(right + fillet, -1.5))
+    p.lineTo(m(right + fillet, 0))
+    p.cubicTo(m(right + fillet * (1 - K), 0), m(right, fillet * (1 - K)), m(right, fillet))
+    p.lineTo(m(right, depth - radius))
+    p.cubicTo(m(right, depth - radius + radius * K),
+              m(right - radius + radius * K, depth), m(right - radius, depth))
+    p.lineTo(m(left + radius, depth))
+    p.cubicTo(m(left + radius - radius * K, depth),
+              m(left, depth - radius + radius * K), m(left, depth - radius))
+    p.lineTo(m(left, fillet))
+    p.cubicTo(m(left, fillet * (1 - K)), m(left - fillet * (1 - K), 0), m(left - fillet, 0))
+    p.closeSubpath()
+    return p
+
+
 def body_points(rect: QtCore.QRectF, radii, step: float = 5.0) -> list[tuple[float, float]]:
     """把圆角矩形均匀采样成多边形顶点（用于形变）。"""
     x, y, w, h = rect.x(), rect.y(), rect.width(), rect.height()
