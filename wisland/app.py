@@ -167,6 +167,8 @@ def main():
 
     pages = [HomePage(ctx), MessagesPage(ctx), StocksPage(ctx), WeatherPage(ctx), ControlsPage(ctx),
              ClipboardPage(ctx), TranslatePage(ctx)]
+    from .knowledge.integration import prepare, attach
+    prepare(ctx, pages)
     ctx.pages = {p.key: p for p in pages}
     P = ctx.pages
 
@@ -178,6 +180,7 @@ def main():
 
     island = Island(pages, peak_fn=peak)
     ctx.island = island
+    attach(app, ctx, island)
     compact = island.compact
 
     # ---------------- 媒体 ----------------

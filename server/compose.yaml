@@ -1,0 +1,26 @@
+services:
+  knowledge:
+    build: .
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    ports:
+      - "127.0.0.1:8766:8766"
+    env_file: .env
+    environment:
+      KNOWLEDGE_DATA: /data
+    volumes:
+      - knowledge-data:/data
+    mem_limit: 1g
+    cpus: 1.5
+    pids_limit: 128
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+volumes:
+  knowledge-data:

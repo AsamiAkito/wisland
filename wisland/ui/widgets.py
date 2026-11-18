@@ -541,7 +541,9 @@ class ScrollArea(QtWidgets.QScrollArea):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.viewport().setAutoFillBackground(False)
         self.setStyleSheet("QScrollArea{background:transparent;border:none}")
-        self.viewport().setStyleSheet("background:transparent")
+        self.viewport().setObjectName("scrollViewport")
+        # 仅透明化视口，避免无范围样式传给悬浮提示造成黑底黑字。
+        self.viewport().setStyleSheet("#scrollViewport{background:transparent}")
         self.inner = QtWidgets.QWidget()
         self.inner.setAutoFillBackground(False)
         self.inner.setObjectName("scrollInner")

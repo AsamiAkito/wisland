@@ -38,6 +38,7 @@ DEFAULTS: dict = {
         "toggle": "Ctrl+Alt+I",
         "translate": "Ctrl+Alt+J",
         "clipboard": "Ctrl+Alt+V",
+        "knowledge_capture": "Ctrl+Alt+K",
     },
     "media": {
         "auto_show": True,           # 开始播放时收起态自动切到音乐（暂停 8 秒后切回）

@@ -17,3 +17,16 @@ models/
 
 # 宣传视频素材与输出
 promo/
+
+# Local AI service credentials and packages
+server/.env
+server/data/
+artifacts/
+.workbuddy/
+
+# Local secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
