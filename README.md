@@ -78,3 +78,12 @@
 ---
 
 实时字幕与单词本流水线移植自 [YishengTranslator-White](https://github.com/kayson-39/YishengTranslator-White)（MIT）。MIT License.
+
+
+## 知识收集与 Obsidian（可选）
+
+将文字、链接和文件拖入灵动岛，或按 `Ctrl+Alt+K` 收集剪贴板；在“知识”页编辑标签、补充说明并搜索。新安装默认仅保存本机。连接后台后可逐条上传，或在设置中开启延迟自动上传。
+
+AI 轻量索引、按需深度整理及写回 Obsidian 需要自行部署独立后台，并填写自己的服务地址、访问令牌和 Vault。模型密钥仅配置在服务器；使用会产生 API 用量。SSH 专题维护为高级可选功能，默认关闭。
+
+使用与首次配置见 [知识收集说明](docs/knowledge-capture.md)，部署见 [后台说明](server/README.md)。开发验证需安装根目录及 `server/requirements.txt` 的依赖，运行 `python -m unittest discover -s tests -v`。

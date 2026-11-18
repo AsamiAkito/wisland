@@ -20,7 +20,8 @@
   "hotkeys": {
     "toggle": "Ctrl+Alt+I",
     "translate": "Ctrl+Alt+J",
-    "clipboard": "Ctrl+Alt+V"
+    "clipboard": "Ctrl+Alt+V",
+    "knowledge_capture": "Ctrl+Alt+K"
   },
   "media": {
     "auto_show": true,
@@ -160,6 +161,23 @@
     "screenshot": false,
     "player_title": "",
     "source": ""
+  },
+  "knowledge": {
+    "vault": "",
+    "server_url": "",
+    "token": "",
+    "max_upload_mb": 256,
+    "auto_upload": false,
+    "upload_delay_s": 10,
+    "ssh_enabled": false,
+    "organizer_enabled": false,
+    "ssh_host": "",
+    "ssh_user": "root",
+    "ssh_port": 22,
+    "ssh_local_port": 18767,
+    "ssh_key": "",
+    "ssh_project_dir": "/opt/wisland-knowledge-server",
+    "ssh_service": "knowledge"
   },
   "clipboard": {
     "max": 10

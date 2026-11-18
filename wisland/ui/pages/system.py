@@ -54,6 +54,9 @@ def _close_on_outside_click(m: QtWidgets.QMenu):
 
 def styled_menu(parent=None) -> QtWidgets.QMenu:
     m = QtWidgets.QMenu(parent)
+    # 这些菜单每次打开时重建；根菜单关闭后连同子菜单一起释放。
+    if not isinstance(parent, QtWidgets.QMenu):
+        m.aboutToHide.connect(m.deleteLater)
     _close_on_outside_click(m)
     m.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     m.setWindowFlag(Qt.WindowType.FramelessWindowHint)
