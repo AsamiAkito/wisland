@@ -158,6 +158,12 @@ class Backdrop(QtCore.QObject):
         while not self._stop:
             with self._lock:
                 interval = self._interval
+                pending = self._want is not None
+            if not pending:
+                # 尚无采样区域时等待首个请求，避免空循环争抢 CPU/GIL。
+                self._wake.wait()
+                self._wake.clear()
+                continue
             self._wake.wait(max(0.0, interval - (time.perf_counter() - last)))
             self._wake.clear()
             if self._stop:
