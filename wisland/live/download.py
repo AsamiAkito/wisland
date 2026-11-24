@@ -18,7 +18,9 @@ from .http_util import system_proxy
 from .paths import MODELS
 
 PARAKEET = "csukuangfj/sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8"
-VAD_REPO = "csukuangfj/sherpa-onnx-vad-models"
+VAD_REPO = "R4kSo1997/sherpa-onnx-silero-vad-v5"
+# 此版本的文件与下方 sherpa-onnx 官方发布逐字节相同，允许跨镜像续传。
+VAD_REVISION = "4a6e5a75370a3ca741c950f8feda0dbed11c18ac"
 VAD_GITHUB = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
 
 # (保存位置, 仓库, 仓库内文件名, 大概大小 字节 —— 拿不到 Content-Length 时用来估算进度)
@@ -43,7 +45,8 @@ def _endpoints() -> list[str]:
 
 
 def _urls(repo: str, name: str) -> list[str]:
-    urls = [f"{e}/{repo}/resolve/main/{name}" for e in _endpoints()]
+    revision = VAD_REVISION if repo == VAD_REPO else "main"
+    urls = [f"{e}/{repo}/resolve/{revision}/{name}" for e in _endpoints()]
     if name == "silero_vad.onnx":
         urls.insert(1, VAD_GITHUB)
     return urls

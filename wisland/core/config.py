@@ -20,6 +20,8 @@ DEFAULTS: dict = {
         "edge": "top",              # top / bottom / left / right
         "pos": 0.5,                 # 沿边位置 0..1
         "screen": 0,
+        "screen_name": "",          # 拖动后记住显示器名称；兼容旧配置的序号
+        "hidden_pages": [],         # 隐藏的导航页；关闭股票页也会停止行情和提醒
         "theme": "auto",            # auto / light / dark
         "hide_fullscreen": False,      # True = 前台全屏（游戏/视频）时隐藏灵动岛
         "hover_expand_ms": 120,
@@ -31,6 +33,7 @@ DEFAULTS: dict = {
         "expand_mode": "hover",     # hover = 悬停展开 / always = 常驻展开 / never = 保持收起
         "pinned": False,            # 旧版"保持展开"（兼容）
         "compact_view": "clock",    # 收起态视图：clock / pet / music（滚轮切换）
+        "edge_strip": False,        # 收起时仅显示沿吸附边的 4 像素细条
         "auto_cycle_s": 30,         # 时间天气与小形象自动轮换的间隔（秒），0 = 不轮换
         "passthrough": False,       # 可穿透：鼠标穿过灵动岛，只响应右键（不影响展开 / 收起）
     },
@@ -41,7 +44,7 @@ DEFAULTS: dict = {
     },
     "media": {
         "auto_show": True,           # 开始播放时收起态自动切到音乐（暂停 8 秒后切回）
-        "lyrics": True,              # 收起态显示歌词（网易云公开歌词接口）
+        "lyrics": True,              # 收起态显示歌词（网易云优先，LRCLIB 回退）
         "netease_log": True,         # 读取网易云本地日志获得播放状态与进度（网易云默认不接入系统媒体控件）
         "priority": ["cloudmusic", "bilibili", "chrome", "zen", "msedge", "firefox"],
     },

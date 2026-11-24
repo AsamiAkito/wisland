@@ -19,7 +19,8 @@ MODELS = ROOT / "models"
 PARAKEET_REPO = "csukuangfj/sherpa-onnx-nemo-parakeet-tdt_ctc-0.6b-ja-35000-int8"
 VAD_URLS = [
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
-    "https://hf-mirror.com/csukuangfj/sherpa-onnx-vad-models/resolve/main/silero_vad.onnx",
+    "https://hf-mirror.com/R4kSo1997/sherpa-onnx-silero-vad-v5/resolve/"
+    "4a6e5a75370a3ca741c950f8feda0dbed11c18ac/silero_vad.onnx",
 ]
 
 

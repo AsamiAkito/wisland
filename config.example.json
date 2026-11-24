@@ -3,6 +3,8 @@
     "edge": "top",
     "pos": 0.5,
     "screen": 0,
+    "screen_name": "",
+    "hidden_pages": [],
     "theme": "auto",
     "hide_fullscreen": false,
     "hover_expand_ms": 120,
@@ -14,6 +16,7 @@
     "expand_mode": "hover",
     "pinned": false,
     "compact_view": "clock",
+    "edge_strip": false,
     "auto_cycle_s": 30,
     "passthrough": false
   },

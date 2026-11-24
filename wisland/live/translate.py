@@ -9,6 +9,7 @@ from typing import Callable, Optional
 import httpx
 
 from .http_util import make_client
+from wisland.services.usage import record_usage
 
 OnDelta = Optional[Callable[[str], None]]
 
@@ -133,6 +134,7 @@ class Translator:
         return str(self.config.get("translate.model", "deepseek-flash") or "deepseek-flash")
 
     def translate(self, text: str, context: list[str], on_delta: OnDelta = None, **_ignored) -> str:
+        self.last_usage = {}
         text = (text or "").strip()
         if not text:
             return ""
@@ -151,6 +153,7 @@ class Translator:
         }
         headers = {"Authorization": f"Bearer {key}"}
         parts: list[str] = []
+        usage = None
         try:
             client = _client(base)
             with client.stream("POST", base + "/chat/completions", json=payload, headers=headers,
@@ -167,7 +170,7 @@ class Translator:
                         break
                     obj = json.loads(data)
                     if obj.get("usage"):
-                        self.last_usage = obj["usage"]
+                        usage = obj["usage"]
                     choices = obj.get("choices") or []
                     piece = str((choices[0].get("delta") or {}).get("content") or "") if choices else ""
                     if piece:
@@ -179,6 +182,10 @@ class Translator:
         except Exception as e:  # noqa: BLE001
             self.last_error = friendly_error(e)
             raise RuntimeError(self.last_error) from e
+        finally:
+            if usage:
+                self.last_usage = usage
+                record_usage(base, usage)
         out = "".join(parts).strip()
         if not out:
             raise RuntimeError("DeepSeek 未返回译文")

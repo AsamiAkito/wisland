@@ -171,6 +171,8 @@ class StockService(QtCore.QObject):
 
     # ---------- lifecycle ----------
     def start(self):
+        if self._running:
+            return
         self._running = True
         self._tick()
 
@@ -252,6 +254,8 @@ class StockService(QtCore.QObject):
 
     def _on_data(self, data: dict):
         self._busy = False
+        if not self._running:
+            return
         self._fail_count = 0
         self.last = data
         try:
@@ -264,6 +268,8 @@ class StockService(QtCore.QObject):
 
     def _on_err(self, e: Exception):
         self._busy = False
+        if not self._running:
+            return
         self._fail_count += 1
         msg = "网络连接失败" if isinstance(e, httpx.TransportError) else f"行情获取失败：{str(e)[:80]}"
         self.last = {"markets": self.last.get("markets", {}), "status": {}, "time": time.time(),

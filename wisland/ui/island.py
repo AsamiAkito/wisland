@@ -39,6 +39,7 @@ FILLET = 13.0                    # 贴边两侧内凹圆角
 BREAK = 64.0                     # 液桥拉断距离
 JOIN = 30.0                      # 靠近到这个距离时液桥伸出
 EDGE_MARGIN = 6
+STRIP_LENGTH, STRIP_DEPTH = 96.0, 4.0
 
 GWL_EXSTYLE = -20
 WS_EX_NOACTIVATE = 0x08000000
@@ -226,6 +227,7 @@ class Island(QtWidgets.QWidget):
         self.backdrop = Backdrop()
         self.compact = CompactView()
         self.pages = pages
+        self.page_by_key = {pg.key: pg for pg in pages}
 
         # ---- 几何状态 ----
         self.edge: str = cfg.get("island.edge", "top")
@@ -235,7 +237,7 @@ class Island(QtWidgets.QWidget):
         self.scr: QtGui.QScreen = self._pick_screen()
         self.mode = "anchored"
         self.expanded = False
-        cw, ch = self.compact.size_hint()
+        cw, ch = self.target_size()
         self.sw = Spring(cw, 300, 0.62, 0.2)
         self.sh = Spring(ch, 300, 0.62, 0.2)
         self.fx = Spring(0, 900, 0.78, 0.2)
@@ -294,7 +296,7 @@ class Island(QtWidgets.QWidget):
         default = cfg.get("island.last_tab") or cfg.get("island.default_tab", "home")
         self._page_key = default if default in self.nav.keys() else self.nav.keys()[0]
         self.nav.set_current(self._page_key)
-        self.stack.setCurrentIndex(self.nav.keys().index(self._page_key))
+        self.stack.setCurrentWidget(self.page_by_key[self._page_key])
 
         # ---- 计时器 ----
         self.timer = QtCore.QTimer(self)
@@ -310,12 +312,27 @@ class Island(QtWidgets.QWidget):
         theme.changed.connect(self.update)
 
         self._place_initial()
+        self.refresh_pages()
+        QtGui.QGuiApplication.instance().screenRemoved.connect(self._screen_removed)
 
     # ================================================================ 屏幕 / 位置
     def _pick_screen(self) -> QtGui.QScreen:
         screens = QtGui.QGuiApplication.screens()
+        name = cfg.get("island.screen_name")
+        if name:
+            return next((s for s in screens if s.name() == name), QtGui.QGuiApplication.primaryScreen())
         i = int(cfg.get("island.screen", 0) or 0)
         return screens[i] if 0 <= i < len(screens) else QtGui.QGuiApplication.primaryScreen()
+
+    def _screen_removed(self, screen):
+        if screen == self.scr:
+            self.scr = QtGui.QGuiApplication.primaryScreen()
+            if self.mode == "drag":
+                QtWidgets.QApplication.restoreOverrideCursor()
+            self.mode = "anchored"
+            self.drips.clear()
+            self._update_geometry(force=True)
+            self._kick()
 
     def _avail(self) -> QtCore.QRectF:
         return QtCore.QRectF(self.scr.availableGeometry())
@@ -362,10 +379,21 @@ class Island(QtWidgets.QWidget):
 
     def target_size(self) -> tuple[float, float]:
         if self.expanded:
-            pg = self.pages[self.stack.currentIndex()]
-            h = PAD - 2 + NAV_H + 8 + pg.preferred_height() + PAD
-            return EXP_W, h
+            return self.expanded_size()
+        if self.edge_strip and self.mode != "drag":
+            if self.edge in ("top", "bottom"):
+                return STRIP_LENGTH, STRIP_DEPTH
+            return STRIP_DEPTH, STRIP_LENGTH
         return self.compact.size_hint()
+
+    @property
+    def edge_strip(self) -> bool:
+        return bool(cfg.get("island.edge_strip", False))
+
+    def set_edge_strip(self, enabled: bool):
+        cfg.set("island.edge_strip", enabled)
+        self.poke.snap(0)
+        self._kick()
 
     def expand(self, page: str | None = None):
         if self.mode != "anchored" or self._fs_hidden:
@@ -409,6 +437,8 @@ class Island(QtWidgets.QWidget):
         self._kick()
 
     def toggle(self, page: str | None = None):
+        if page and page not in self.nav.keys():
+            return
         if self.expanded and (page is None or page == self._page_key):
             if self.pinned():
                 self.set_pinned(False)
@@ -417,12 +447,19 @@ class Island(QtWidgets.QWidget):
             self.expand(page)
             self.locks.add("pin")
 
+    def refresh_pages(self):
+        hidden = cfg.get("island.hidden_pages") or []
+        items = [(pg.key, pg.glyph, pg.title) for pg in self.pages if pg.key == "home" or pg.key not in hidden]
+        current = self._page_key if any(key == self._page_key for key, _, _ in items) else "home"
+        self.nav.set_items(items, current)
+        self.show_page(current)
+
     def show_page(self, key: str):
         keys = self.nav.keys()
         if key not in keys:
             return
         old = self.stack.currentIndex()
-        i = keys.index(key)
+        i = self.stack.indexOf(self.page_by_key[key])
         self._page_key = key
         self.nav.set_current(key)
         if i != old:
@@ -487,11 +524,23 @@ class Island(QtWidgets.QWidget):
         QtWidgets.QApplication.setOverrideCursor(Qt.CursorShape.ClosedHandCursor)
         self._kick()
 
+    def _drag_target(self):
+        cursor = QtGui.QCursor.pos()
+        target = QtCore.QPointF(cursor) + self.drag_off
+        screen = QtGui.QGuiApplication.screenAt(cursor)
+        if screen and screen != self.scr:
+            self.scr = screen
+            self.neck_edge = None
+            self.neck_s.snap(0)
+            self.drips.clear()
+            # 不让弹簧穿过不同 DPI 的屏幕之间没有逻辑坐标的区域。
+            self.fx.snap(target.x())
+            self.fy.snap(target.y())
+        return target
+
     def _end_drag(self):
         QtWidgets.QApplication.restoreOverrideCursor()
-        c = QtCore.QPointF(self.fx.x, self.fy.x)
-        scr = QtGui.QGuiApplication.screenAt(c.toPoint()) or self.scr
-        self.scr = scr
+        c = self._drag_target()
         R = self._avail()
         w, h = self.sw.target, self.sh.target
         body = QtCore.QRectF(c.x() - w / 2, c.y() - h / 2, w, h)
@@ -547,7 +596,7 @@ class Island(QtWidgets.QWidget):
         for s in (self.sw, self.sh, self.content_a, self.compact_a, self.neck_s):
             if not s.rest:
                 return True
-        if not self.expanded and not self._fs_hidden:
+        if not self.expanded and not self._fs_hidden and not self.edge_strip:
             return True                  # 收起态：常态动画（圆角呼吸 + 边缘流光）持续运行
         return False
 
@@ -560,11 +609,11 @@ class Island(QtWidgets.QWidget):
             if not (user32.GetAsyncKeyState(0x01) & 0x8000):
                 self._end_drag()
             else:
-                cp = QtCore.QPointF(QtGui.QCursor.pos()) + self.drag_off
+                cp = self._drag_target()
                 self.fx.to(cp.x())
                 self.fy.to(cp.y())
         if not self.expanded:
-            cw, ch = self.compact.size_hint()
+            cw, ch = self.target_size()
             if abs(self.sw.target - cw) > 0.5 or abs(self.sh.target - ch) > 0.5:
                 if self.content_a.x < 0.12:
                     self.sw.to(cw, 460, 0.64)
@@ -624,6 +673,7 @@ class Island(QtWidgets.QWidget):
             cfg.set("island.edge", self.edge, save=False)
             cfg.set("island.pos", round(self.pos_frac, 4), save=False)
             screens = QtGui.QGuiApplication.screens()
+            cfg.set("island.screen_name", self.scr.name(), save=False)
             cfg.set("island.screen", screens.index(self.scr) if self.scr in screens else 0)
             self.neck_edge = self.edge
             self.neck_s.to(1)
@@ -670,12 +720,14 @@ class Island(QtWidgets.QWidget):
                 "left": body.left() - line, "right": line - body.right()}[edge]
 
     def _update_geometry(self, force: bool = False):
-        w, h = max(40.0, self.sw.x), max(24.0, self.sh.x)
+        strip = self.edge_strip and self.mode == "anchored" and not self.expanded
+        w = max(STRIP_DEPTH if self.edge_strip else 40.0, self.sw.x)
+        h = max(STRIP_DEPTH if self.edge_strip else 24.0, self.sh.x)
         vx = vy = 0.0
         squash = 0.0
         if self.mode == "anchored":
             pk = clamp(self.poke.x, -0.5, 1.2)
-            if abs(pk) > 0.002 and not self.expanded:
+            if abs(pk) > 0.002 and not self.expanded and not strip:
                 # 可穿透时被鼠标"按住"：整颗水滴朝屏幕边压扁、略微变宽，松开后带回弹
                 if self.edge in ("top", "bottom"):
                     h, w = h * (1 - 0.16 * pk), w * (1 + 0.05 * pk)
@@ -683,6 +735,10 @@ class Island(QtWidgets.QWidget):
                     w, h = w * (1 - 0.16 * pk), h * (1 + 0.05 * pk)
             a = self._anchor_along(w, h)
             c = self._center_on_edge(self.edge, a, 0, w, h)
+            if strip and self.edge == "bottom":
+                c.setY(c.y() - 1)
+            elif strip and self.edge == "right":
+                c.setX(c.x() - 1)
             self.neck_edge = self.edge
         elif self.mode == "snap":
             g = self.gap.x
@@ -760,7 +816,7 @@ class Island(QtWidgets.QWidget):
         path = QtGui.QPainterPath()
         neck = None
         gap_n = 0.0
-        if self.neck_edge:
+        if self.neck_edge and not strip:
             ne = self.neck_edge
             line = self._line(ne)
             gap_n = max(0.0, self._gap_to(ne, body, line))
@@ -778,9 +834,9 @@ class Island(QtWidgets.QWidget):
             radii = (base_r,) * 4
 
         speed = math.hypot(vx, vy)
-        playing_wave = (self.mode == "anchored" and not self.expanded and self.compact.mode() == "media"
+        playing_wave = (self.mode == "anchored" and not strip and not self.expanded and self.compact.mode() == "media"
                         and self.compact.playing())
-        poking = self.mode == "anchored" and abs(self.poke.x) > 0.01
+        poking = self.mode == "anchored" and not strip and abs(self.poke.x) > 0.01
         if speed > 30 or playing_wave or poking:
             pts = body_points(lbody, radii, 4.0)
             wave = None
@@ -950,6 +1006,11 @@ class Island(QtWidgets.QWidget):
         path = self.path
         if path.isEmpty():
             return
+        if self.edge_strip and not self.expanded and self.mode == "anchored" and min(
+                self.body.width(), self.body.height()) <= STRIP_DEPTH:
+            p.fillPath(path, theme.accent)
+            self._bd_prev = None
+            return
         # 1) 柔和阴影（几层半透明描边，廉价近似）
         sp = path.translated(0, 1.5)
         for wdt, a in ((14, 5), (8, 9), (4, 14)):
@@ -1011,7 +1072,7 @@ class Island(QtWidgets.QWidget):
             rad.setColorAt(1, QtGui.QColor(255, 255, 255, 0))
             p.strokePath(path, QtGui.QPen(QtGui.QBrush(rad), 1.0))
         # 6) 收起状态内容
-        if self.compact_a.x > 0.01:
+        if self.compact_a.x > 0.01 and (not self.edge_strip or self.mode == "drag"):
             pk = clamp(self.poke.x, -0.5, 1.2) if (self.mode == "anchored" and not self.expanded) else 0.0
             _horiz = self.edge in ("top", "bottom")
             _cu = bb.center().x() if _horiz else bb.center().y()
@@ -1030,6 +1091,8 @@ class Island(QtWidgets.QWidget):
     # ================================================================ 鼠标
     def _inside(self, gp: QtCore.QPoint) -> bool:
         lp = QtCore.QPointF(gp - self._win_origin)
+        if self.edge_strip and not self.expanded and self.mode == "anchored":
+            return self.path.contains(lp + QtCore.QPointF(0.5, 0.5))
         if self.path.contains(lp):
             return True
         return self.body.adjusted(-4, -4, 4, 4).contains(lp)
@@ -1044,7 +1107,7 @@ class Island(QtWidgets.QWidget):
             return
         inside = self._inside(QtGui.QCursor.pos())
         now = time.monotonic()
-        if not self.expanded and self.mode == "anchored" and not self._fs_hidden:
+        if not self.expanded and not self.edge_strip:
             # 收起时（任何展开方式）：鼠标靠近就把水滴"挤"一下，离开后带回弹地恢复
             # 只有鼠标进入灵动岛范围才挤压；越靠近中心挤压越强（边缘处几乎不变形）。
             # 靠近但没碰到时只有表情变化（由小形象自己处理），不挤压。
@@ -1115,7 +1178,7 @@ class Island(QtWidgets.QWidget):
 
     def _on_play_button(self, local: QtCore.QPointF) -> bool:
         r = self.compact.play_rect
-        return (r is not None and not self.expanded and self.compact.mode() == "media"
+        return (not self.edge_strip and r is not None and not self.expanded and self.compact.mode() == "media"
                 and r.adjusted(-6, -8, 6, 8).contains(local))
 
     def mouseReleaseEvent(self, e):

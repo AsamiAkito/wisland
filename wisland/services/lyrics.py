@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""歌词：从网易云音乐公开接口获取 LRC 歌词（含翻译），按播放进度给出当前行。
+"""歌词：优先使用网易云音乐（含翻译），缺少时间轴歌词时回退到 LRCLIB。
 
 - 网易云（读本地日志得到歌曲 id）：直接按 id 取歌词
 - 其它播放器（QQ 音乐、Spotify、浏览器等）：按「歌名 + 歌手」搜索，取时长最接近的一首
@@ -11,6 +11,7 @@ from __future__ import annotations
 import bisect
 import re
 import threading
+import unicodedata
 
 import httpx
 from PySide6 import QtCore
@@ -23,6 +24,10 @@ HEADERS = {"Referer": "https://music.163.com/", "User-Agent": "Mozilla/5.0 (Wind
 _TS = re.compile(r"\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]")
 # 开头的制作信息（作词 / 作曲 / 编曲 …）不当作歌词显示
 _CREDIT = re.compile(r"^\s*[^\s:：]{1,12}\s*[:：]")
+
+
+def _name(value: str) -> str:
+    return " ".join(unicodedata.normalize("NFKC", value or "").casefold().split())
 
 
 def parse_lrc(text: str) -> list[tuple[float, str]]:
@@ -77,7 +82,7 @@ class LyricsService(QtCore.QObject):
     def key(m: dict) -> str:
         if m.get("song_id"):
             return "id:" + str(m["song_id"])
-        return "q:" + (m.get("title") or "") + "|" + (m.get("artist") or "")
+        return "q:" + repr((m.get("title"), m.get("artist"), m.get("album"), round(m.get("duration") or 0)))
 
     def get(self, m: dict) -> Lyrics | None:
         """返回已缓存的歌词；没有时在后台获取，取到后发 ready(key)。"""
@@ -104,6 +109,13 @@ class LyricsService(QtCore.QObject):
 
     # ---------------- 网络 ----------------
     def _fetch(self, m: dict) -> Lyrics | None:
+        try:
+            lyrics = self._netease(m)
+        except (httpx.HTTPError, ValueError):
+            lyrics = None
+        return lyrics or self._lrclib(m)
+
+    def _netease(self, m: dict) -> Lyrics | None:
         sid = str(m.get("song_id") or "") or self._search(m)
         if not sid:
             return None
@@ -118,23 +130,43 @@ class LyricsService(QtCore.QObject):
         return lyr if lyr else None
 
     def _search(self, m: dict) -> str:
+        dur = float(m.get("duration") or 0)
+        if not (30 <= dur <= 15 * 60):
+            return ""  # 避免把没有时间轴或很长的视频误配为歌曲
         title = re.sub(r"\s*[\(（\[【].*?[\)）\]】]\s*", " ", m.get("title") or "").strip() or m.get("title", "")
         q = f"{title} {m.get('artist') or ''}".strip()
         r = self._client.get(API + "/search/get/web", params={"s": q, "type": 1, "limit": 8})
         r.raise_for_status()
         songs = ((r.json().get("result") or {}).get("songs")) or []
-        if not songs:
-            return ""
-        dur = float(m.get("duration") or 0)
-        if not (30 <= dur <= 15 * 60):
-            return ""            # 不知道时长 / 时长不像一首歌（视频、番剧等）：不按歌名猜歌词
-        name = title.lower()
+        names = {_name(title), _name(m.get("title"))}
+        matches = []
+        for song in songs:
+            delta = abs((song.get("duration") or 0) / 1000 - dur)
+            if song.get("id") and _name(song.get("name")) in names and delta <= 8:
+                matches.append((delta, str(song["id"])))
+        return min(matches)[1] if matches else ""
 
-        def score(s):
-            same = (s.get("name") or "").lower().strip() == name
-            dd = abs((s.get("duration") or 0) / 1000.0 - dur) if dur else 0
-            return (0 if same else 1, dd)
-        best = min(songs, key=score)
-        if dur and abs((best.get("duration") or 0) / 1000.0 - dur) > 8:
-            return ""            # 时长对不上：多半不是同一首，宁可不显示
-        return str(best.get("id") or "")
+    def _lrclib(self, m: dict) -> Lyrics | None:
+        dur = float(m.get("duration") or 0)
+        artist = m.get("artist") or ""
+        if not artist.strip() or not (30 <= dur <= 15 * 60):
+            return None
+        params = {"track_name": m["title"], "artist_name": artist}
+        response = self._client.get("https://lrclib.net/api/search", params=params,
+                                    headers={"User-Agent": "Wisland (https://github.com/AsamiAkito/wisland)",
+                                             "Referer": "https://lrclib.net/"})
+        response.raise_for_status()
+        matches = []
+        for record in response.json():
+            if (_name(record.get("trackName")) != _name(m["title"])
+                    or _name(record.get("artistName")) != _name(artist)):
+                continue
+            delta = abs((record.get("duration") or 0) - dur)
+            if delta <= 8:
+                same_album = _name(record.get("albumName")) == _name(m.get("album"))
+                matches.append((not same_album, delta, record))
+        for _, _, record in sorted(matches, key=lambda item: item[:2]):
+            lines = parse_lrc(record.get("syncedLyrics"))
+            if lines:
+                return Lyrics(lines, [])
+        return None

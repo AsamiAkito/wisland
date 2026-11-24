@@ -67,17 +67,22 @@ def _G():
     return G
 
 
-def autostart_enabled() -> bool:
+def _registered_autostart() -> str:
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
-            winreg.QueryValueEx(k, "wisland")
-            return True
+            return winreg.QueryValueEx(k, "wisland")[0]
     except OSError:
-        return False
+        return ""
+
+
+def autostart_enabled() -> bool:
+    return _registered_autostart().casefold() == _autostart_cmd().casefold()
 
 
 def _autostart_cmd() -> str:
-    """开机自启命令：通过 wisland.vbs 启动（它会选用不带控制台的 pythonw，不会弹出终端窗口）。"""
+    pyw = ROOT / "runtime" / "pythonw.exe"
+    if pyw.is_file():
+        return f'"{pyw}" -B "{ROOT / "run.pyw"}"'
     wscript = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "wscript.exe")
     return f'"{wscript}" "{ROOT / "wisland.vbs"}"'
 
@@ -85,12 +90,9 @@ def _autostart_cmd() -> str:
 def fix_autostart():
     """旧版本直接用 .venv/Scripts/pythonw.exe 自启：在 uv 创建的环境里会弹出终端窗口，
     关掉窗口灵动岛也会退出。检测到旧的命令就改成通过 wisland.vbs 启动。"""
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
-            cur, _ = winreg.QueryValueEx(k, "wisland")
-    except OSError:
-        return
-    if cur != _autostart_cmd():
+    cur = _registered_autostart().casefold()
+    old_python = str(ROOT / ".venv" / "Scripts" / "pythonw.exe").casefold()
+    if old_python in cur and str(ROOT / "run.pyw").casefold() in cur:
         try:
             set_autostart(True)
         except OSError:
@@ -101,7 +103,7 @@ def set_autostart(on: bool):
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
         if on:
             winreg.SetValueEx(k, "wisland", 0, winreg.REG_SZ, _autostart_cmd())
-        else:
+        elif autostart_enabled():
             try:
                 winreg.DeleteValue(k, "wisland")
             except OSError:
@@ -138,6 +140,7 @@ def main():
     from .ui.pages.info import StocksPage, WeatherPage
     from .ui.pages.system import ControlsPage, styled_menu
     from .ui.pages.tools import ClipboardPage, TranslatePage
+    from .ui.pages.usage import UsagePage
     from .ui.theme import KIND_COLORS, THEME_NAMES, G, theme
     from .ui.widgets import glyph_pixmap
 
@@ -166,7 +169,7 @@ def main():
     ctx.island = None
 
     pages = [HomePage(ctx), MessagesPage(ctx), StocksPage(ctx), WeatherPage(ctx), ControlsPage(ctx),
-             ClipboardPage(ctx), TranslatePage(ctx)]
+             ClipboardPage(ctx), TranslatePage(ctx), UsagePage(ctx)]
     ctx.pages = {p.key: p for p in pages}
     P = ctx.pages
 
@@ -364,8 +367,28 @@ def main():
     island.hotkey.connect(on_hotkey)
 
     # ---------------- 菜单 / 托盘 ----------------
+    def apply_pages():
+        island.refresh_pages()
+        if "stock" in island.nav.keys():
+            ctx.stocks.start()
+        else:
+            ctx.stocks.stop()
+
+    def set_page_enabled(key, enabled):
+        hidden = list(cfg.get("island.hidden_pages") or [])
+        if enabled:
+            hidden = [k for k in hidden if k != key]
+        elif key not in hidden:
+            hidden.append(key)
+        cfg.set("island.hidden_pages", hidden)
+        if key == "stock":
+            apply_pages()
+        else:
+            island.refresh_pages()
+
     def reload_cfg():
         cfg.load()
+        apply_pages()
         theme.set_mode(cfg.get("island.theme", "auto"))
         island.register_hotkeys()
         P["home"].build_launcher()
@@ -373,6 +396,13 @@ def main():
         island.activity({"glyph": G.CHECK, "title": "配置已重新加载"}, 1.8)
 
     def build_menu(menu: QtWidgets.QMenu):
+        pm = menu.addMenu("显示页面")
+        for page in pages:
+            if page.key != "home":
+                action = pm.addAction(page.title)
+                action.setCheckable(True)
+                action.setChecked(page.key in island.nav.keys())
+                action.triggered.connect(lambda checked, k=page.key: set_page_enabled(k, checked))
         menu.addAction("编辑配置 config.json").triggered.connect(lambda: os.startfile(str(CONFIG_PATH)))  # noqa: S606
         menu.addAction("重新加载配置").triggered.connect(reload_cfg)
         tm = menu.addMenu("主题")
@@ -383,6 +413,10 @@ def main():
         for mode, label in (("hover", "悬停展开"), ("always", "常驻展开"), ("never", "长关")):
             a = em.addAction(("✓  " if island.expand_mode() == mode else "    ") + label)
             a.triggered.connect(lambda _=False, m=mode: island.set_expand_mode(m))
+        a = menu.addAction("收起时显示极简细边")
+        a.setCheckable(True)
+        a.setChecked(island.edge_strip)
+        a.triggered.connect(island.set_edge_strip)
         a = menu.addAction(("✓  " if island.passthrough() else "    ") + "可穿透")
         a.triggered.connect(lambda: island.set_passthrough(not island.passthrough()))
         a = menu.addAction(("✓  " if island.capture_visible() else "    ") + "参与截图")
@@ -440,8 +474,38 @@ def main():
     tray = QtWidgets.QSystemTrayIcon(QtGui.QIcon(glyph_pixmap(G.APPS, 32, QtGui.QColor("#4f8cff"))), app)
     tray.setToolTip("wisland 灵动岛")
     tmenu = QtWidgets.QMenu()
-    tmenu.aboutToShow.connect(lambda: (tmenu.clear(), tmenu.addAction("展开 / 收起").triggered.connect(island.toggle),
-                                       build_menu(tmenu)))
+    def foreground_island():
+        island.set_fullscreen_hidden(False)
+        island.showNormal()
+        island.expand()
+        island.raise_()
+        island.request_focus()
+
+    def build_apps_menu(menu):
+        import psutil
+        menu.clear()
+        windows = ctx.windows.list_windows()
+        for window in windows:
+            action = menu.addAction(window["title"].replace("&", "&&"))
+            action.triggered.connect(lambda _, h=window["hwnd"]: ctx.windows.activate(h))
+        visible = {w["exe"].lower() for w in windows}
+        running = {(p.info["name"] or "").lower() for p in psutil.process_iter(["name"])}
+        for exe in cfg.get("apps.restore_hotkey") or {}:
+            if exe.lower() in running - visible:
+                action = menu.addAction(exe)
+                action.triggered.connect(lambda _, e=exe: ctx.windows.restore_running(e))
+        if not menu.actions():
+            menu.addAction("没有可唤醒的窗口").setEnabled(False)
+
+    def build_tray_menu():
+        tmenu.clear()
+        tmenu.addAction("唤醒灵动岛").triggered.connect(foreground_island)
+        tmenu.addAction("展开 / 收起").triggered.connect(lambda: island.toggle())
+        apps_menu = tmenu.addMenu("唤醒应用窗口")
+        apps_menu.aboutToShow.connect(lambda: build_apps_menu(apps_menu))
+        build_menu(tmenu)
+
+    tmenu.aboutToShow.connect(build_tray_menu)
     tray.setContextMenu(tmenu)
     tray.activated.connect(lambda r: island.toggle() if r == QtWidgets.QSystemTrayIcon.ActivationReason.Trigger else None)
     tray.show()
@@ -469,13 +533,15 @@ def main():
 
     # ---------------- 启动 ----------------
     island.show()
-    for s in (ctx.media, ctx.audio, ctx.brightness, ctx.radio, ctx.windows, ctx.notify, ctx.stocks,
+    for s in (ctx.media, ctx.audio, ctx.brightness, ctx.radio, ctx.windows, ctx.notify,
               ctx.weather, ctx.clash, ctx.translate, ctx.clipboard, ctx.mailcheck, ctx.learn):
         try:
             if hasattr(s, "start"):
                 s.start()
         except Exception:  # noqa: BLE001
             traceback.print_exc()
+    if "stock" in island.nav.keys():
+        ctx.stocks.start()
     fs_timer.start()
 
     def shutdown():

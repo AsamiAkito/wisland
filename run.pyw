@@ -71,9 +71,10 @@ except SystemExit:
 except ImportError as e:
     traceback.print_exc()
     import ctypes
-    ctypes.windll.user32.MessageBoxW(
-        None, f"缺少依赖：{e}\n\n当前 Python：{sys.executable}\n\n请双击项目文件夹里的 setup.bat，"
-              "它会把依赖安装进 .venv；装完后再双击 wisland.vbs 启动。", "wisland 启动失败", 0x10)
+    recovery = ("请重新运行 Wisland 安装程序以修复运行环境。" if os.path.isfile(os.path.join(ROOT, "runtime", "pythonw.exe"))
+                else "请双击项目文件夹里的 setup.bat 安装依赖，再双击 wisland.vbs 启动。")
+    ctypes.windll.user32.MessageBoxW(None, f"缺少依赖：{e}\n\n当前 Python：{sys.executable}\n\n{recovery}",
+                                    "wisland 启动失败", 0x10)
     sys.exit(1)
 except Exception:
     traceback.print_exc()

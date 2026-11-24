@@ -20,6 +20,7 @@ from PySide6 import QtCore
 
 from wisland.core.bg import launch, run_bg, ui
 from wisland.core.config import DATA_DIR, cfg, expand
+from wisland.services.usage import balance_text, record_usage
 
 HISTORY_PATH = DATA_DIR / "translate_history.json"
 HISTORY_MAX = 30
@@ -120,6 +121,10 @@ class TranslateService(QtCore.QObject):
     def has_key(self) -> bool:
         return bool(self._settings()[0])
 
+    def balance(self) -> str:
+        key, base, _ = self._settings()
+        return balance_text(key, base)
+
     def _http(self) -> httpx.Client:
         with self._client_lock:
             if self._client is None or self._client.is_closed:
@@ -149,6 +154,7 @@ class TranslateService(QtCore.QObject):
     def _work(self, rid: int, text: str):
         if not self._alive(rid):
             return  # 还没开始就已被更新的请求取代
+        usage = None
         try:
             key, base, model = self._settings()
             if not key:
@@ -162,6 +168,8 @@ class TranslateService(QtCore.QObject):
                 "max_tokens": max(256, min(4000, len(text) * 3 + 200)),
                 "stream": True,
             }
+            if base in (DEFAULT_BASE_URL, DEFAULT_BASE_URL + "/v1"):
+                payload["stream_options"] = {"include_usage": True}
             deadline = time.monotonic() + TOTAL_DEADLINE_S
             parts: list[str] = []
             with self._http().stream("POST", base + "/chat/completions", json=payload,
@@ -183,6 +191,8 @@ class TranslateService(QtCore.QObject):
                         obj = json.loads(data)
                     except ValueError:
                         continue
+                    if obj.get("usage"):
+                        usage = obj["usage"]
                     choices = obj.get("choices") or []
                     piece = str((choices[0].get("delta") or {}).get("content") or "") if choices else ""
                     if piece:
@@ -200,6 +210,9 @@ class TranslateService(QtCore.QObject):
         except Exception as e:  # noqa: BLE001
             if self._alive(rid):
                 self.failed.emit(rid, friendly_error(e))
+        finally:
+            if usage:
+                record_usage(base, usage)
 
     # ---------- history ----------
     def _load_history(self) -> list[dict]:

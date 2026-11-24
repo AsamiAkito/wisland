@@ -601,21 +601,22 @@ class WindowService(QtCore.QObject):
         except Exception:  # noqa: BLE001
             return False
 
+    def restore_running(self, exe: str) -> bool:
+        h = self.find_app_window(exe)
+        if h and self.activate(h):
+            return True
+        from wisland.core.config import cfg
+        hk = (cfg.get("apps.restore_hotkey") or {}).get(exe.lower())
+        if hk and self._process_running(exe) and send_hotkey(hk):
+            QtCore.QTimer.singleShot(600, lambda: self._focus_later(exe, hk))
+            return True
+        return False
+
     def open_or_focus(self, path: str, exe: str | None = None, args=None) -> str:
         """应用已打开 -> 切到它的窗口；否则启动。返回 "focused" / "launched" / "failed"。"""
         exe = exe or (os.path.basename(path) if str(path).lower().endswith(".exe") else "")
-        if exe:
-            h = self.find_app_window(exe)
-            if h and self.activate(h):
-                return "focused"
-            # 最小化到托盘（窗口被隐藏）：用应用自己的"显示窗口"热键让它自己恢复，
-            # 不强行 ShowWindow（会和应用内部状态不一致），也不重新启动 exe（微信会开新实例）
-            from wisland.core.config import cfg
-            hk = (cfg.get("apps.restore_hotkey") or {}).get(exe.lower())
-            if hk and self._process_running(exe):
-                if send_hotkey(hk):
-                    QtCore.QTimer.singleShot(600, lambda e=exe, k=hk: self._focus_later(e, k))
-                    return "focused"
+        if exe and self.restore_running(exe):
+            return "focused"
         if args and isinstance(args, str):
             args = args.split()
         return "launched" if launch(path, list(args or [])) else "failed"
