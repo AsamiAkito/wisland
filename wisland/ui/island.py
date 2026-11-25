@@ -25,7 +25,7 @@ from .anim import Spring, clamp, lerp, smooth
 from .compact import CompactView
 from .glass import Backdrop, exclude_from_capture
 from .nav import NavBar
-from .shape import body_path, body_points, deform, drip_path, edge_corners, neck_path, poly_path
+from .shape import anchored_path, body_path, body_points, deform, drip_path, edge_corners, neck_path, poly_path
 from .theme import G, theme
 
 Qt = QtCore.Qt
@@ -585,10 +585,19 @@ class Island(QtWidgets.QWidget):
         self.neck_s.snap(0)
 
     # ================================================================ 每帧
+    def _set_frame_interval(self, interval: int) -> None:
+        # 活跃 QTimer 即使设置相同间隔也会重启；只在切换帧率时调整。
+        if self.timer.interval() != interval:
+            self.timer.setInterval(interval)
+
     def _kick(self):
         if not self.timer.isActive():
+            self._set_frame_interval(16)
             self._last = time.perf_counter()
             self.timer.start()
+        elif self.mode != "anchored" or not (self.sw.rest and self.sh.rest and self.poke.rest):
+            # 从空闲态进入展开、拖动或按压时，立即恢复动画的原定帧率。
+            self._set_frame_interval(16)
 
     def _needs_frames(self) -> bool:
         if self.mode != "anchored" or self.drips or self._bd_prev is not None:
@@ -695,12 +704,12 @@ class Island(QtWidgets.QWidget):
         self._update_geometry()
         if not self._needs_frames() and self.mode == "anchored":
             self.timer.stop()
-            self.timer.setInterval(16)
-        elif self.mode == "anchored" and self.sw.rest and self.sh.rest and not self.expanded:
+            self._set_frame_interval(16)
+        elif self.mode == "anchored" and self.sw.rest and self.sh.rest and self.poke.rest and not self.expanded:
             # 只有常态动画：表情 / 音乐律动 / 提醒时 60fps，空闲（只有圆角呼吸）时 30fps
-            self.timer.setInterval(16 if self.compact.busy() else 33)
+            self._set_frame_interval(16 if self.compact.busy() else 33)
         else:
-            self.timer.setInterval(16)
+            self._set_frame_interval(16)
 
     # ================================================================ 形状计算
     def _nearest_edge(self, body: QtCore.QRectF) -> tuple[str, float]:
@@ -890,7 +899,13 @@ class Island(QtWidgets.QWidget):
         else:
             body_p = body_path(lbody, radii)
         path = body_p
-        if neck is not None and not neck.isEmpty():
+        depth = h if self.edge in ("top", "bottom") else w
+        if (self.mode == "anchored" and self.neck_edge == self.edge and gap_n < 1e-6
+                and self.neck_s.rest and abs(self.neck_s.x - 1) < 1e-6
+                and speed <= 30 and not playing_wave and not poking
+                and depth >= base_r + fillet):
+            path = anchored_path(lbody, self.edge, fillet, base_r)
+        elif neck is not None and not neck.isEmpty():
             path = path.united(neck)
         for d in self.drips:
             e = d["edge"]
